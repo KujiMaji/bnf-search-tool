@@ -165,6 +165,7 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
 <script>
 /* ============================================================
    CONFIG — ei 3 ta value nijer moto bosao setup korar por
@@ -190,19 +191,19 @@ const refreshBtn = document.getElementById('refreshBtn');
 const CACHE_KEY = 'bnf_csv_cache_v1';
 const CACHE_TIME_KEY = 'bnf_csv_cache_time_v1';
 
-window.addEventListener('load', () => {
-  // load cached data immediately (works fully offline)
-  const cached = localStorage.getItem(CACHE_KEY);
-  const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
-  if (cached) {
-    try {
+window.addEventListener('load', async () => {
+  // load cached data immediately (works fully offline) — stored in IndexedDB (no 5MB limit like localStorage)
+  try {
+    const cached = await idbKeyval.get(CACHE_KEY);
+    const cachedTime = await idbKeyval.get(CACHE_TIME_KEY);
+    if (cached) {
       dataset = JSON.parse(cached);
       statusBar.className = 'status-bar ok';
       statusBar.textContent = `✓ Cached data loaded (${dataset.length.toLocaleString()} rows) — last updated: ${cachedTime ? new Date(cachedTime).toLocaleString() : 'unknown'}`;
       headerStat.style.display = 'inline-flex';
       headerStatNum.textContent = dataset.length.toLocaleString();
-    } catch (e) { /* ignore corrupt cache */ }
-  }
+    }
+  } catch (e) { /* ignore corrupt/missing cache */ }
   if (window.google && google.accounts) initGoogleAuth();
   else setTimeout(() => { if (window.google && google.accounts) initGoogleAuth(); }, 800);
 });
@@ -267,10 +268,12 @@ async function refreshFromDrive() {
     Papa.parse(csvText, {
       header: true,
       skipEmptyLines: true,
-      complete: result => {
+      complete: async result => {
         dataset = result.data;
-        localStorage.setItem(CACHE_KEY, JSON.stringify(dataset));
-        localStorage.setItem(CACHE_TIME_KEY, new Date().toISOString());
+        try {
+          await idbKeyval.set(CACHE_KEY, JSON.stringify(dataset));
+          await idbKeyval.set(CACHE_TIME_KEY, new Date().toISOString());
+        } catch (cacheErr) { /* cache save failed but search still works this session */ }
         statusBar.className = 'status-bar ok';
         statusBar.textContent = `✓ Updated — ${dataset.length.toLocaleString()} rows (${new Date().toLocaleString()})`;
         headerStat.style.display = 'inline-flex';
