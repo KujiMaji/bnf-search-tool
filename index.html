@@ -35,6 +35,19 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 .header-stat .num{font-family:'JetBrains Mono',monospace;font-weight:600}
 
 .toolbar-card{background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:16px;padding:1.1rem;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.drive-sync-box{background:var(--bg-accent, #EEF0FE);border:0.5px solid var(--border-accent, #4F46E5);border-radius:12px;padding:14px;margin-bottom:1rem}
+.drive-sync-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn-google{flex:1;min-width:160px;height:40px;background:#fff;border:1px solid var(--border-strong, #D3CFC5);border-radius:var(--radius, 8px);font-family:var(--font-sans);font-size:13px;font-weight:600;color:var(--text-primary, #1A1A18);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.btn-google:hover{background:var(--surface-1, #F6F5F1)}
+.btn-refresh{height:40px;padding:0 16px;background:linear-gradient(135deg,#6366F1,#8B5CF6);color:#fff;border:none;border-radius:var(--radius, 8px);font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:var(--font-sans)}
+.btn-refresh:disabled{opacity:0.5;cursor:not-allowed}
+.btn-refresh.spinning i{animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.sync-meta{font-size:12px;color:var(--text-secondary, #6B6A66);margin-top:8px;line-height:1.4}
+.sync-meta.err{color:var(--text-danger, #B91C1C)}
+.manual-fallback{margin-bottom:1rem;font-size:12px}
+.manual-fallback summary{cursor:pointer;color:var(--text-accent, #4F46E5);font-weight:500;padding:4px 0}
+.manual-fallback[open] summary{margin-bottom:8px}
 .upload-area{border:1.5px dashed var(--border-strong, #D3CFC5);border-radius:12px;padding:1.25rem;text-align:center;margin-bottom:1rem;background:var(--surface-1, #F6F5F1);cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .upload-area:hover{border-color:var(--border-accent, #4F46E5);background:var(--bg-accent, #EEF0FE)}
 .upload-area.active{border-color:var(--border-accent, #4F46E5);background:var(--bg-accent, #EEF0FE)}
@@ -123,32 +136,157 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
   </div>
 
   <div class="toolbar-card">
-    <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
-      <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
-      <div class="upload-text">CSV file drop koro ba <span>click kore select koro</span></div>
-      <div style="font-size:12px;color:var(--text-muted, #98958D);margin-top:4px">Donor er website theke download kora file direct dibe — daily/weekly update korte parbey</div>
+    <div class="drive-sync-box" id="driveSyncBox">
+      <div class="drive-sync-row">
+        <button id="googleSignInBtn" class="btn-google"><i class="ti ti-brand-google" aria-hidden="true"></i> Google diye sign in koro</button>
+        <button id="refreshBtn" class="btn-refresh" style="display:none" onclick="refreshFromDrive()"><i class="ti ti-refresh" aria-hidden="true"></i> Update</button>
+      </div>
+      <div class="sync-meta" id="syncMeta">Sign in korle, internet thakle Drive theke shobcheye notun data automatic load hobe — internet na thakle last-update kora data diye offline-e search cholbe.</div>
     </div>
-    <input type="file" id="fileInput" class="file-input" accept=".csv">
+
+    <details class="manual-fallback">
+      <summary>Ba, CSV file manually upload koro</summary>
+      <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
+        <div class="upload-text">CSV file drop koro ba <span>click kore select koro</span></div>
+      </div>
+      <input type="file" id="fileInput" class="file-input" accept=".csv">
+    </details>
 
     <div class="search-row">
       <input type="text" id="searchInput" placeholder="BNFUniqueID ba Txt_Unique_ID dao (jemon: 2003363 ba IND-BGD-...)" />
       <button onclick="doSearch()"><i class="ti ti-search" aria-hidden="true" style="margin-right:4px"></i>Search</button>
     </div>
-    <div class="status-bar" id="statusBar">Kono data loaded nei — CSV file upload koro</div>
+    <div class="status-bar" id="statusBar">Kono data loaded nei — Google diye sign in koro ba CSV upload koro</div>
   </div>
 
   <div class="results" id="results"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
+/* ============================================================
+   CONFIG — ei 3 ta value nijer moto bosao setup korar por
+   ============================================================ */
+const GOOGLE_CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+const DRIVE_FILE_ID     = 'YOUR_GOOGLE_DRIVE_FILE_ID';
+const ALLOWED_EMAILS    = ['example1@gmail.com', 'example2@gmail.com']; // extra client-side check — asol security Drive file sharing theke ashe
+/* ============================================================ */
+
 let dataset = [];
+let accessToken = null;
+let tokenClient = null;
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const statusBar = document.getElementById('statusBar');
 const headerStat = document.getElementById('headerStat');
 const headerStatNum = document.getElementById('headerStatNum');
+const syncMeta = document.getElementById('syncMeta');
+const googleSignInBtn = document.getElementById('googleSignInBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+
+const CACHE_KEY = 'bnf_csv_cache_v1';
+const CACHE_TIME_KEY = 'bnf_csv_cache_time_v1';
+
+window.addEventListener('load', () => {
+  // load cached data immediately (works fully offline)
+  const cached = localStorage.getItem(CACHE_KEY);
+  const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+  if (cached) {
+    try {
+      dataset = JSON.parse(cached);
+      statusBar.className = 'status-bar ok';
+      statusBar.textContent = `✓ Cached data loaded (${dataset.length.toLocaleString()} rows) — last updated: ${cachedTime ? new Date(cachedTime).toLocaleString() : 'unknown'}`;
+      headerStat.style.display = 'inline-flex';
+      headerStatNum.textContent = dataset.length.toLocaleString();
+    } catch (e) { /* ignore corrupt cache */ }
+  }
+  if (window.google && google.accounts) initGoogleAuth();
+  else setTimeout(() => { if (window.google && google.accounts) initGoogleAuth(); }, 800);
+});
+
+function initGoogleAuth() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email',
+    callback: handleTokenResponse,
+  });
+  googleSignInBtn.addEventListener('click', () => {
+    if (!navigator.onLine) { syncMeta.className = 'sync-meta err'; syncMeta.textContent = 'Internet connection nei — sign in korte online thakte hobe.'; return; }
+    tokenClient.requestAccessToken({ prompt: 'select_account' });
+  });
+}
+
+async function handleTokenResponse(resp) {
+  if (resp.error) {
+    syncMeta.className = 'sync-meta err';
+    syncMeta.textContent = 'Sign in fail hoyeche: ' + resp.error;
+    return;
+  }
+  accessToken = resp.access_token;
+
+  // verify signed-in email against allowlist (extra client-side check —
+  // real protection comes from the Drive file's own sharing permissions)
+  try {
+    const uinfo = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } }).then(r => r.json());
+    if (ALLOWED_EMAILS.length && !ALLOWED_EMAILS.includes(uinfo.email)) {
+      syncMeta.className = 'sync-meta err';
+      syncMeta.textContent = `${uinfo.email} ei tool-e access nei — admin-er sathe kotha bolo.`;
+      accessToken = null;
+      return;
+    }
+    googleSignInBtn.style.display = 'none';
+    refreshBtn.style.display = 'inline-flex';
+    syncMeta.className = 'sync-meta';
+    syncMeta.textContent = `Signed in: ${uinfo.email}`;
+    await refreshFromDrive();
+  } catch (e) {
+    syncMeta.className = 'sync-meta err';
+    syncMeta.textContent = 'Account verify korte problem hoyeche, abar try koro.';
+  }
+}
+
+async function refreshFromDrive() {
+  if (!accessToken) { tokenClient.requestAccessToken({ prompt: '' }); return; }
+  if (!navigator.onLine) { syncMeta.className = 'sync-meta err'; syncMeta.textContent = 'Internet nei — cached data-i use hocche.'; return; }
+
+  refreshBtn.disabled = true;
+  refreshBtn.classList.add('spinning');
+  statusBar.className = 'status-bar';
+  statusBar.textContent = 'Drive theke notun data fetch hocche...';
+
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${DRIVE_FILE_ID}?alt=media`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) throw new Error(res.status === 403 ? 'Ei file-e tomar access nei (Drive permission check koro)' : `HTTP ${res.status}`);
+    const csvText = await res.text();
+
+    Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: true,
+      complete: result => {
+        dataset = result.data;
+        localStorage.setItem(CACHE_KEY, JSON.stringify(dataset));
+        localStorage.setItem(CACHE_TIME_KEY, new Date().toISOString());
+        statusBar.className = 'status-bar ok';
+        statusBar.textContent = `✓ Updated — ${dataset.length.toLocaleString()} rows (${new Date().toLocaleString()})`;
+        headerStat.style.display = 'inline-flex';
+        headerStatNum.textContent = dataset.length.toLocaleString();
+        syncMeta.className = 'sync-meta';
+        syncMeta.textContent = `Last updated: ${new Date().toLocaleString()}`;
+      }
+    });
+  } catch (e) {
+    statusBar.className = 'status-bar';
+    statusBar.textContent = 'Update fail hoyeche — ' + e.message + ' (age-r cached data-i thakbe)';
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.classList.remove('spinning');
+  }
+}
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
