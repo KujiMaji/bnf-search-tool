@@ -35,28 +35,6 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 .header-stat .num{font-family:'JetBrains Mono',monospace;font-weight:600}
 
 .toolbar-card{background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:16px;padding:1.1rem;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.dash-wrap{display:none;margin-bottom:1.5rem}
-.dash-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
-.stat-card{background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:12px;padding:12px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.stat-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.stat-value{font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;color:var(--text-primary, #1A1A18);line-height:1.1}
-.stat-label{font-size:10.5px;color:var(--text-muted, #98958D);margin-top:2px;text-transform:uppercase;letter-spacing:0.04em;font-weight:600}
-.dash-coverage{background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.coverage-row{display:flex;align-items:center;gap:10px;padding:5px 0}
-.coverage-label{font-size:12px;color:var(--text-secondary, #6B6A66);width:150px;flex-shrink:0}
-.coverage-track{flex:1;height:7px;background:var(--surface-1, #F6F5F1);border-radius:4px;overflow:hidden}
-.coverage-fill{height:100%;border-radius:4px}
-.coverage-count{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--text-primary, #1A1A18);width:40px;text-align:right}
-.dash-monthly{background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:12px;padding:14px;margin-top:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.month-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--border, #E7E4DD);flex-wrap:wrap}
-.month-row:last-child{border-bottom:none}
-.month-label{font-family:'Manrope',var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif);font-size:13px;font-weight:700;color:var(--text-primary, #1A1A18);width:88px;flex-shrink:0}
-.month-chip{font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;white-space:nowrap}
-.month-chip.assess{background:var(--bg-accent, #EEF0FE);color:var(--text-accent, #4F46E5)}
-.month-chip.discharge{background:var(--bg-warning, #FEF6E7);color:var(--text-warning, #B45309)}
-.month-chip.close{background:var(--bg-danger, #FDECEC);color:var(--text-danger, #B91C1C)}
-.month-selector{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
-.month-selector select{height:34px;padding:0 10px;border:0.5px solid var(--border-strong, #D3CFC5);border-radius:8px;font-size:12.5px;font-family:var(--font-sans);color:var(--text-primary, #1A1A18);background:var(--surface-1, #F6F5F1)}
 .drive-sync-box{background:var(--bg-accent, #EEF0FE);border:0.5px solid var(--border-accent, #4F46E5);border-radius:12px;padding:14px;margin-bottom:1rem}
 .drive-sync-row{display:flex;gap:8px;flex-wrap:wrap}
 .btn-google{flex:1;min-width:160px;height:40px;background:#fff;border:1px solid var(--border-strong, #D3CFC5);border-radius:var(--radius, 8px);font-family:var(--font-sans);font-size:13px;font-weight:600;color:var(--text-primary, #1A1A18);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
@@ -157,8 +135,6 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
     <div class="header-stat" id="headerStat"><i class="ti ti-database" aria-hidden="true"></i><span class="num" id="headerStatNum">0</span> rows loaded</div>
   </div>
 
-  <div class="dash-wrap" id="datasetDashboard"></div>
-
   <div class="toolbar-card">
     <div class="drive-sync-box" id="driveSyncBox">
       <div class="drive-sync-row">
@@ -222,7 +198,6 @@ window.addEventListener('load', async () => {
     const cachedTime = await idbKeyval.get(CACHE_TIME_KEY);
     if (cached) {
       dataset = JSON.parse(cached);
-      renderDatasetDashboard(computeDatasetStats(dataset));
       statusBar.className = 'status-bar ok';
       statusBar.textContent = `✓ Cached data loaded (${dataset.length.toLocaleString()} rows) — last updated: ${cachedTime ? new Date(cachedTime).toLocaleString() : 'unknown'}`;
       headerStat.style.display = 'inline-flex';
@@ -295,7 +270,6 @@ async function refreshFromDrive() {
       skipEmptyLines: true,
       complete: async result => {
         dataset = result.data;
-        renderDatasetDashboard(computeDatasetStats(dataset));
         try {
           await idbKeyval.set(CACHE_KEY, JSON.stringify(dataset));
           await idbKeyval.set(CACHE_TIME_KEY, new Date().toISOString());
@@ -332,7 +306,6 @@ function loadFile(file) {
     skipEmptyLines: true,
     complete: res => {
       dataset = res.data;
-      renderDatasetDashboard(computeDatasetStats(dataset));
       statusBar.className = 'status-bar ok';
       statusBar.textContent = `✓ "${file.name}" ready to search`;
       headerStat.style.display = 'inline-flex';
@@ -404,102 +377,6 @@ function getServiceInfo(row, svc) {
     caseType: v(row, svc.caseType),
     cause: v(row, svc.cause) || v(row, svc.condition),
   };
-}
-
-function computeDatasetStats(data) {
-  const totalRows = data.length;
-  const bnfSet = new Set();
-  let closedCount = 0, openCount = 0;
-  const serviceCounts = {};
-  SERVICES.forEach(s => serviceCounts[s.key] = 0);
-  data.forEach(row => {
-    const bid = v(row, 'BNFUniqueID');
-    if (bid) bnfSet.add(bid);
-    if (v(row, 'CaseClose')) closedCount++; else openCount++;
-    SERVICES.forEach(svc => {
-      if (v(row, svc.assess) || v(row, svc.collectDate)) serviceCounts[svc.key]++;
-    });
-  });
-  return { totalRows, uniqueBNFs: bnfSet.size, closedCount, openCount, serviceCounts, monthly: computeMonthlyStats(data) };
-}
-
-function computeMonthlyStats(data) {
-  const months = {};
-  function bucket(dateStr) {
-    if (!dateStr) return null;
-    const d = new Date(dateStr);
-    if (isNaN(d)) return null;
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-  }
-  function ensure(key) {
-    if (!months[key]) months[key] = { assessments: 0, discharges: 0, closures: 0 };
-    return months[key];
-  }
-  data.forEach(row => {
-    SERVICES.forEach(svc => {
-      const startKey = bucket(v(row, svc.assess) || v(row, svc.collectDate));
-      if (startKey) ensure(startKey).assessments++;
-      const disKey = bucket(v(row, svc.dis));
-      if (disKey) ensure(disKey).discharges++;
-    });
-    const closeKey = bucket(v(row, 'CaseCloseDate'));
-    if (closeKey) ensure(closeKey).closures++;
-  });
-  return Object.entries(months).sort((a, b) => b[0].localeCompare(a[0]));
-}
-
-function monthLabel(key) {
-  const [y, m] = key.split('-');
-  const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return `${names[parseInt(m, 10) - 1]} ${y}`;
-}
-
-function statCardHtml(icon, label, value, color) {
-  return `<div class="stat-card"><div class="stat-icon" style="background:${color}22;color:${color}"><i class="ti ${icon}" aria-hidden="true"></i></div><div><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div></div>`;
-}
-
-function renderDatasetDashboard(stats) {
-  const el = document.getElementById('datasetDashboard');
-  if (!stats.totalRows) { el.style.display = 'none'; el.innerHTML = ''; return; }
-
-  let html = '<div class="dash-stats">';
-  html += statCardHtml('ti-database', 'Total records', stats.totalRows.toLocaleString(), '#6366F1');
-  html += statCardHtml('ti-users', 'Unique beneficiaries', stats.uniqueBNFs.toLocaleString(), '#14B8A6');
-  html += statCardHtml('ti-circle-check', 'Cases open', stats.openCount.toLocaleString(), '#1D9E75');
-  html += statCardHtml('ti-circle-x', 'Cases closed', stats.closedCount.toLocaleString(), '#BA4B3F');
-  html += '</div>';
-
-  const maxCount = Math.max(...Object.values(stats.serviceCounts), 1);
-  const activeServices = SERVICES.filter(s => stats.serviceCounts[s.key] > 0);
-  if (activeServices.length) {
-    html += '<div class="dash-coverage"><div class="section-label"><i class="ti ti-chart-bar" aria-hidden="true" style="margin-right:4px"></i>Service coverage (sob beneficiary mile)</div>';
-    activeServices.forEach(svc => {
-      const count = stats.serviceCounts[svc.key];
-      const pct = Math.round((count / maxCount) * 100);
-      html += `<div class="coverage-row">
-        <span class="coverage-label">${svc.label}</span>
-        <div class="coverage-track"><div class="coverage-fill" style="width:${pct}%;background:${svc.color}"></div></div>
-        <span class="coverage-count">${count}</span>
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  if (stats.monthly && stats.monthly.length) {
-    html += '<div class="dash-monthly"><div class="section-label"><i class="ti ti-calendar-stats" aria-hidden="true" style="margin-right:4px"></i>Month-wise summary</div>';
-    stats.monthly.forEach(([key, m]) => {
-      html += `<div class="month-row">
-        <span class="month-label">${monthLabel(key)}</span>
-        ${m.assessments ? `<span class="month-chip assess"><i class="ti ti-clipboard-check" aria-hidden="true" style="margin-right:3px"></i>${m.assessments} assessed</span>` : ''}
-        ${m.discharges ? `<span class="month-chip discharge"><i class="ti ti-door-exit" aria-hidden="true" style="margin-right:3px"></i>${m.discharges} discharged</span>` : ''}
-        ${m.closures ? `<span class="month-chip close"><i class="ti ti-circle-x" aria-hidden="true" style="margin-right:3px"></i>${m.closures} closed</span>` : ''}
-      </div>`;
-    });
-    html += '</div>';
-  }
-
-  el.innerHTML = html;
-  el.style.display = 'block';
 }
 
 function doSearch() {
