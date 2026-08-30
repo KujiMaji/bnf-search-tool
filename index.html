@@ -341,6 +341,35 @@ function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.ch
 
 function v(row, key) { return key && row[key] && row[key] !== '' && row[key] !== 'NaN' && row[key] !== 'nan' ? row[key] : null; }
 
+function formatDate(dateStr) {
+  if (!dateStr) return dateStr;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return dateStr;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${day}/${months[d.getMonth()]}/${d.getFullYear()}`;
+}
+
+// working days elapsed since a given date, up to today, excluding Friday & Saturday (HI Bangladesh weekend)
+function workingDaysSince(dateStr) {
+  if (!dateStr) return null;
+  const start = new Date(dateStr);
+  if (isNaN(start)) return null;
+  const end = new Date();
+  start.setHours(0,0,0,0);
+  end.setHours(0,0,0,0);
+  if (start > end) return null;
+  let count = 0;
+  const cur = new Date(start);
+  cur.setDate(cur.getDate() + 1);
+  while (cur <= end) {
+    const day = cur.getDay(); // 0=Sun ... 5=Fri, 6=Sat
+    if (day !== 5 && day !== 6) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 function getServiceInfo(row, svc) {
   const assessDate = v(row, svc.assess);
   const collectDate = v(row, svc.collectDate);
@@ -405,7 +434,7 @@ function doSearch() {
     html += '<div class="multi-entry-tab">';
     matches.forEach((r,i) => {
       const entryDate = v(r,'CollectData') || '';
-      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">Entry ${i+1}${entryDate?' — '+entryDate:''}</button>`;
+      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">Entry ${i+1}${entryDate?' — '+formatDate(entryDate):''}</button>`;
     });
     html += '</div>';
   }
@@ -422,12 +451,15 @@ function doSearch() {
     const caseClose = v(row,'CaseClose');
     const caseCloseDate = v(row,'CaseCloseDate');
     const disability = v(row,'Pwd') || '';
+    const pwdText = disability
+      ? (disability.trim().toLowerCase() === 'yes' ? 'PWD: Yes' : disability.trim().toLowerCase() === 'no' ? 'PWD: No' : `PWD: ${disability}`)
+      : '';
 
     const initials = name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
     const avatarBg = AVATAR_GRADIENTS[hashStr(bnfID !== '—' ? bnfID : name) % AVATAR_GRADIENTS.length];
 
     const caseStatusHtml = caseClose
-      ? `<span class="case-status closed"><i class="ti ti-circle-x" aria-hidden="true"></i> Case closed</span>${caseCloseDate ? `<span class="chip chip-discharge"><i class="ti ti-calendar-x" aria-hidden="true" style="margin-right:3px"></i>${caseCloseDate}</span>` : ''}`
+      ? `<span class="case-status closed"><i class="ti ti-circle-x" aria-hidden="true"></i> Case closed</span>${caseCloseDate ? `<span class="chip chip-discharge"><i class="ti ti-calendar-x" aria-hidden="true" style="margin-right:3px"></i>${formatDate(caseCloseDate)}</span>` : ''}`
       : `<span class="case-status open"><i class="ti ti-circle-check" aria-hidden="true"></i> Case open</span>`;
 
     const activeServices = [];
@@ -458,8 +490,8 @@ function doSearch() {
         overviewHtml += `<div class="overview-item">
           <span class="ov-dot" style="background:${svc.color}"></span>
           <span class="ov-name">${svc.label}</span>
-          ${info.assessed ? `<span class="chip chip-assess"><i class="ti ti-clipboard-check" aria-hidden="true" style="margin-right:3px"></i>${info.assessed}</span>` : ''}
-          ${info.discharged ? `<span class="chip chip-discharge"><i class="ti ti-door-exit" aria-hidden="true" style="margin-right:3px"></i>${info.discharged}</span>` : `<span class="chip chip-ongoing">Ongoing</span>`}
+          ${info.assessed ? `<span class="chip chip-assess"><i class="ti ti-clipboard-check" aria-hidden="true" style="margin-right:3px"></i>${formatDate(info.assessed)}</span>` : ''}
+          ${info.discharged ? `<span class="chip chip-discharge"><i class="ti ti-door-exit" aria-hidden="true" style="margin-right:3px"></i>${formatDate(info.discharged)}</span>` : `<span class="chip chip-ongoing">Ongoing</span>`}
         </div>`;
       });
       overviewHtml += '</div></div>';
@@ -468,13 +500,17 @@ function doSearch() {
       activeServices.forEach(({svc, info}) => {
         const dotClass = info.discharged ? 'discharged' : 'active';
         let rows = '';
-        if(info.assessed) rows += `<div class="service-row"><span>IR/Assessment date</span><span>${info.assessed}</span></div>`;
-        if(info.firstSession) rows += `<div class="service-row"><span>First session</span><span>${info.firstSession}</span></div>`;
-        if(info.lastSession && info.lastSession !== info.firstSession) rows += `<div class="service-row"><span>Last session</span><span>${info.lastSession}</span></div>`;
+        if(info.assessed) rows += `<div class="service-row"><span>IR/Assessment date</span><span>${formatDate(info.assessed)}</span></div>`;
+        if(info.firstSession) rows += `<div class="service-row"><span>First session</span><span>${formatDate(info.firstSession)}</span></div>`;
+        if(info.lastSession && info.lastSession !== info.firstSession) rows += `<div class="service-row"><span>Last session</span><span>${formatDate(info.lastSession)}</span></div>`;
         if(info.sessionCount > 1) rows += `<div class="service-row"><span>Total sessions</span><span>${info.sessionCount}</span></div>`;
         if(info.intervalInfo) rows += `<div class="service-row"><span>Session interval</span><span>${info.intervalInfo}</span></div>`;
         if(info.sessNumPlan) rows += `<div class="service-row"><span>Sessions planned</span><span>${info.sessNumPlan}</span></div>`;
-        if(info.discharged) rows += `<div class="service-row"><span>Discharge date</span><span class="discharge-highlight">${info.discharged}</span></div>`;
+        if(!info.discharged) {
+          const wd = workingDaysSince(info.lastSession || info.firstSession);
+          if (wd !== null) rows += `<div class="service-row"><span>Days since last session</span><span>${wd} working days</span></div>`;
+        }
+        if(info.discharged) rows += `<div class="service-row"><span>Discharge date</span><span class="discharge-highlight">${formatDate(info.discharged)}</span></div>`;
         if(info.dischargeReason) rows += `<div class="service-row"><span>Discharge reason</span><span>${info.dischargeReason}</span></div>`;
         if(info.priority) rows += `<div class="service-row"><span>Priority</span><span>${info.priority}</span></div>`;
         if(info.cause) rows += `<div class="service-row"><span>Condition/cause</span><span>${info.cause}</span></div>`;
@@ -499,7 +535,7 @@ function doSearch() {
         <div class="bnf-avatar" style="background:${avatarBg}">${initials}</div>
         <div style="flex:1">
           <div class="bnf-name">${name} ${caseStatusHtml}</div>
-          <div class="bnf-meta">${[age?age+' years':'', sex, disability==='yes'?'PwD':'', camp, block].filter(Boolean).join(' · ')}</div>
+          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, block].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
       <div class="bnf-ids">
