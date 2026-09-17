@@ -460,6 +460,16 @@ function doSearch() {
     const txtUID = v(row,'Txt_Unique_ID') || '—';
     const progressID = v(row,'ProgressID') || v(row,'proGres') || '—';
     const cardNumber = vAny(row, ['CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard']);
+    const isDuplicate = v(row,'DuplicationBNF')==='yes';
+    let dupBarcodes = isDuplicate ? vAny(row, ['DuplicateBarcode','DuplicateBarcodes','DupBarcode','DuplicateBNFID','DuplicateID','DuplicateOf','DuplicateTxtID','DuplicationBarcode','LinkedBarcode','DuplicateUniqueID','DuplicateCardNo','DuplicateCardNumber']) : null;
+    if (isDuplicate && !dupBarcodes && name !== '—') {
+      const others = dataset.filter(r => r !== row
+        && (v(r,'BNFname')||'').trim().toLowerCase() === name.trim().toLowerCase()
+        && (v(r,'hhsitename')||'') === camp
+        && (v(r,'hhlocalblock')||'') === block);
+      const otherBarcodes = [...new Set(others.map(r => v(r,'Txt_Unique_ID') || v(r,'BNFUniqueID')).filter(Boolean).filter(b => b !== txtUID && b !== bnfID))];
+      if (otherBarcodes.length) dupBarcodes = otherBarcodes.join(', ');
+    }
     const caseClose = v(row,'CaseClose');
     const caseCloseDate = v(row,'CaseCloseDate');
     const disability = v(row,'Pwd') || '';
@@ -560,7 +570,7 @@ function doSearch() {
         <div class="id-badge"><strong>Unique ID</strong>${txtUID}</div>
         <div class="id-badge"><strong>Progress ID</strong>${progressID}</div>
         ${cardNumber ? `<div class="id-badge"><strong>Card No</strong>${cardNumber}</div>` : ''}
-        ${v(row,'DuplicationBNF')==='yes'?'<div class="id-badge" style="color:var(--text-warning, #B45309)"><i class="ti ti-copy" aria-hidden="true"></i> Duplicate flagged</div>':''}
+        ${isDuplicate ? `<div class="id-badge" style="color:var(--text-warning, #B45309)"><i class="ti ti-copy" aria-hidden="true"></i> Duplicate flagged${dupBarcodes ? ` — barcode: ${dupBarcodes}` : ''}</div>` : ''}
       </div>
       ${kpiHtml}
       ${overviewHtml}
