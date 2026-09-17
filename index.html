@@ -45,9 +45,17 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 @keyframes spin{to{transform:rotate(360deg)}}
 .sync-meta{font-size:12px;color:var(--text-secondary, #6B6A66);margin-top:8px;line-height:1.4}
 .sync-meta.err{color:var(--text-danger, #B91C1C)}
-.manual-fallback{margin-bottom:1rem;font-size:12px}
-.manual-fallback summary{cursor:pointer;color:var(--text-accent, #4F46E5);font-weight:500;padding:4px 0}
-.manual-fallback[open] summary{margin-bottom:8px}
+.btn-csv-toggle{width:100%;height:42px;padding:0 14px;background:var(--surface-1, #F6F5F1);border:0.5px solid var(--border-strong, #D3CFC5);border-radius:10px;font-family:var(--font-sans);font-size:13px;font-weight:600;color:var(--text-primary, #1A1A18);cursor:pointer;display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.btn-csv-toggle:hover{background:var(--bg-accent, #EEF0FE);border-color:var(--border-accent, #4F46E5)}
+.btn-csv-toggle #csvToggleIcon{transition:transform 0.15s}
+.btn-csv-toggle.open #csvToggleIcon{transform:rotate(180deg)}
+.session-toggle-row{cursor:pointer;justify-content:space-between;align-items:center}
+.session-toggle-row:hover{color:var(--text-accent, #4F46E5)}
+.session-toggle-row .chev{transition:transform 0.15s}
+.session-toggle-row.open .chev{transform:rotate(180deg)}
+.session-dropdown{display:none;background:var(--surface-2, #FFFFFF);border:0.5px solid var(--border, #E7E4DD);border-radius:8px;padding:6px 10px;margin:4px 0 6px}
+.session-date-item{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text-secondary, #6B6A66);padding:3px 0;border-bottom:0.5px dashed var(--border, #E7E4DD)}
+.session-date-item:last-child{border-bottom:none}
 .upload-area{border:1.5px dashed var(--border-strong, #D3CFC5);border-radius:12px;padding:1.25rem;text-align:center;margin-bottom:1rem;background:var(--surface-1, #F6F5F1);cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .upload-area:hover{border-color:var(--border-accent, #4F46E5);background:var(--bg-accent, #EEF0FE)}
 .upload-area.active{border-color:var(--border-accent, #4F46E5);background:var(--bg-accent, #EEF0FE)}
@@ -136,6 +144,16 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
   </div>
 
   <div class="toolbar-card">
+    <button class="btn-csv-toggle" onclick="toggleCsvUpload()">
+      <i class="ti ti-file-text" aria-hidden="true"></i> CSV Upload
+      <i class="ti ti-chevron-down" id="csvToggleIcon" aria-hidden="true" style="margin-left:auto"></i>
+    </button>
+    <div class="upload-area" id="dropZone" style="display:none" onclick="document.getElementById('fileInput').click()">
+      <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
+      <div class="upload-text">CSV file drop koro ba <span>click kore select koro</span></div>
+    </div>
+    <input type="file" id="fileInput" class="file-input" accept=".csv">
+
     <div class="drive-sync-box" id="driveSyncBox">
       <div class="drive-sync-row">
         <button id="googleSignInBtn" class="btn-google"><i class="ti ti-brand-google" aria-hidden="true"></i> Google diye sign in koro</button>
@@ -143,15 +161,6 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
       </div>
       <div class="sync-meta" id="syncMeta">Sign in korle, internet thakle Drive theke shobcheye notun data automatic load hobe — internet na thakle last-update kora data diye offline-e search cholbe.</div>
     </div>
-
-    <details class="manual-fallback">
-      <summary>Ba, CSV file manually upload koro</summary>
-      <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
-        <div class="upload-text">CSV file drop koro ba <span>click kore select koro</span></div>
-      </div>
-      <input type="file" id="fileInput" class="file-input" accept=".csv">
-    </details>
 
     <div class="search-row">
       <input type="text" id="searchInput" placeholder="BNFUniqueID ba Txt_Unique_ID dao (jemon: 2003363 ba IND-BGD-...)" />
@@ -340,6 +349,7 @@ const AVATAR_GRADIENTS = [
 function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.charCodeAt(i)) | 0; } return Math.abs(h); }
 
 function v(row, key) { return key && row[key] && row[key] !== '' && row[key] !== 'NaN' && row[key] !== 'nan' ? row[key] : null; }
+function vAny(row, keys) { for (const k of keys) { const val = v(row, k); if (val) return val; } return null; }
 
 function formatDate(dateStr) {
   if (!dateStr) return dateStr;
@@ -401,6 +411,7 @@ function getServiceInfo(row, svc) {
     discharged: disDate,
     dischargeReason: disWhy,
     intervalInfo,
+    allSessions,
     priority: v(row, svc.priority),
     sessNumPlan: v(row, svc.sessNum),
     caseType: v(row, svc.caseType),
@@ -448,6 +459,7 @@ function doSearch() {
     const bnfID = v(row,'BNFUniqueID') || '—';
     const txtUID = v(row,'Txt_Unique_ID') || '—';
     const progressID = v(row,'ProgressID') || v(row,'proGres') || '—';
+    const cardNumber = vAny(row, ['CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard']);
     const caseClose = v(row,'CaseClose');
     const caseCloseDate = v(row,'CaseCloseDate');
     const disability = v(row,'Pwd') || '';
@@ -504,6 +516,11 @@ function doSearch() {
         if(info.firstSession) rows += `<div class="service-row"><span>First session</span><span>${formatDate(info.firstSession)}</span></div>`;
         if(info.lastSession && info.lastSession !== info.firstSession) rows += `<div class="service-row"><span>Last session</span><span>${formatDate(info.lastSession)}</span></div>`;
         if(info.sessionCount > 1) rows += `<div class="service-row"><span>Total sessions</span><span>${info.sessionCount}</span></div>`;
+        if(info.allSessions && info.allSessions.length > 0) {
+          const toggleId = `sess_${idx}_${svc.key}`;
+          rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>All session dates</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
+          <div class="session-dropdown" id="${toggleId}">${info.allSessions.map(d => `<div class="session-date-item">${formatDate(d)}</div>`).join('')}</div>`;
+        }
         if(info.intervalInfo) rows += `<div class="service-row"><span>Session interval</span><span>${info.intervalInfo}</span></div>`;
         if(info.sessNumPlan) rows += `<div class="service-row"><span>Sessions planned</span><span>${info.sessNumPlan}</span></div>`;
         if(!info.discharged) {
@@ -542,6 +559,7 @@ function doSearch() {
         <div class="id-badge"><strong>BNF ID</strong>${bnfID}</div>
         <div class="id-badge"><strong>Unique ID</strong>${txtUID}</div>
         <div class="id-badge"><strong>Progress ID</strong>${progressID}</div>
+        ${cardNumber ? `<div class="id-badge"><strong>Card No</strong>${cardNumber}</div>` : ''}
         ${v(row,'DuplicationBNF')==='yes'?'<div class="id-badge" style="color:var(--text-warning, #B45309)"><i class="ti ti-copy" aria-hidden="true"></i> Duplicate flagged</div>':''}
       </div>
       ${kpiHtml}
@@ -551,6 +569,22 @@ function doSearch() {
   });
 
   resultsDiv.innerHTML = html;
+}
+
+function toggleCsvUpload() {
+  const area = document.getElementById('dropZone');
+  const btn = document.querySelector('.btn-csv-toggle');
+  const isOpen = area.style.display !== 'none';
+  area.style.display = isOpen ? 'none' : 'block';
+  btn.classList.toggle('open', !isOpen);
+}
+
+function toggleSessions(id) {
+  const dd = document.getElementById(id);
+  const row = document.getElementById(id + '_row');
+  const isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if (row) row.classList.toggle('open', !isOpen);
 }
 
 function showEntry(idx) {
