@@ -145,14 +145,26 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 
   <div class="toolbar-card">
     <button class="btn-csv-toggle" onclick="toggleCsvUpload()">
-      <i class="ti ti-file-text" aria-hidden="true"></i> CSV Upload
+      <i class="ti ti-file-text" aria-hidden="true"></i> CSV Upload (Service data)
       <i class="ti ti-chevron-down" id="csvToggleIcon" aria-hidden="true" style="margin-left:auto"></i>
     </button>
     <div class="upload-area" id="dropZone" style="display:none" onclick="document.getElementById('fileInput').click()">
       <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
-      <div class="upload-text">CSV file drop koro ba <span>click kore select koro</span></div>
+      <div class="upload-text">Excel/CSV file drop koro ba <span>click kore select koro</span></div>
     </div>
-    <input type="file" id="fileInput" class="file-input" accept=".csv">
+    <input type="file" id="fileInput" class="file-input" accept=".csv,.xlsx,.xls">
+
+    <button class="btn-csv-toggle" onclick="toggleAdUpload()">
+      <i class="ti ti-wheelchair" aria-hidden="true"></i> AD Dataset Upload (Excel/CSV)
+      <i class="ti ti-chevron-down" id="adToggleIcon" aria-hidden="true" style="margin-left:auto"></i>
+    </button>
+    <div class="upload-area" id="adDropZone" style="display:none" onclick="document.getElementById('adFileInput').click()">
+      <div class="upload-icon"><i class="ti ti-wheelchair" aria-hidden="true"></i></div>
+      <div class="upload-text">AD Excel/CSV file drop koro ba <span>click kore select koro</span></div>
+      <div class="upload-hint" style="font-size:11.5px;color:var(--text-muted, #98958D);margin-top:4px">.xlsx, .xls, ba .csv — BNFUniqueID column diye service data-r shathe match hobe</div>
+    </div>
+    <input type="file" id="adFileInput" class="file-input" accept=".xlsx,.xls,.csv">
+    <div class="status-bar" id="adStatusBar" style="display:none"></div>
 
     <div class="drive-sync-box" id="driveSyncBox">
       <div class="drive-sync-row">
@@ -173,6 +185,7 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
 <script>
@@ -181,6 +194,7 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
    ============================================================ */
 const GOOGLE_CLIENT_ID = '609087559433-4ep98ddhkemmmg4d4sgjr2e3fdkrbf9u.apps.googleusercontent.com';
 const DRIVE_FILE_ID     = '1sNAqpGMt5zRfbTSEqlwf79-yKLpHRPvJ';
+const AD_DRIVE_FILE_ID   = 'YOUR_AD_GOOGLE_DRIVE_FILE_ID'; // AD dataset's Drive File ID — leave as-is to skip auto-sync for AD data
 const ALLOWED_EMAILS    = ['isaadiba26@gmail.com']; // extra client-side check — asol security Drive file sharing theke ashe
 /* ============================================================ */
 
@@ -199,6 +213,8 @@ const refreshBtn = document.getElementById('refreshBtn');
 
 const CACHE_KEY = 'bnf_csv_cache_v1';
 const CACHE_TIME_KEY = 'bnf_csv_cache_time_v1';
+const AD_CACHE_KEY = 'bnf_ad_cache_v1';
+const AD_CACHE_TIME_KEY = 'bnf_ad_cache_time_v1';
 
 window.addEventListener('load', async () => {
   // load cached data immediately (works fully offline) — stored in IndexedDB (no 5MB limit like localStorage)
@@ -213,6 +229,16 @@ window.addEventListener('load', async () => {
       headerStatNum.textContent = dataset.length.toLocaleString();
     }
   } catch (e) { /* ignore corrupt/missing cache */ }
+  try {
+    const adCached = await idbKeyval.get(AD_CACHE_KEY);
+    const adCachedTime = await idbKeyval.get(AD_CACHE_TIME_KEY);
+    if (adCached) {
+      adDataset = JSON.parse(adCached);
+      adStatusBar.style.display = 'block';
+      adStatusBar.className = 'status-bar ok';
+      adStatusBar.textContent = `✓ Cached AD data loaded (${adDataset.length.toLocaleString()} rows) — last updated: ${adCachedTime ? new Date(adCachedTime).toLocaleString() : 'unknown'}`;
+    }
+  } catch (e) { /* ignore corrupt/missing AD cache */ }
   if (window.google && google.accounts) initGoogleAuth();
   else setTimeout(() => { if (window.google && google.accounts) initGoogleAuth(); }, 800);
 });
@@ -258,6 +284,29 @@ async function handleTokenResponse(resp) {
   }
 }
 
+async function fetchDriveDataset(fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) throw new Error(res.status === 403 ? 'Ei file-e tomar access nei (Drive permission check koro)' : `HTTP ${res.status}`);
+  const contentType = res.headers.get('content-type') || '';
+  const isExcel = contentType.includes('spreadsheetml') || contentType.includes('ms-excel') || contentType.includes('officedocument');
+  if (isExcel) {
+    const buf = await res.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
+  }
+  const csvText = await res.text();
+  return await new Promise((resolve, reject) => {
+    Papa.parse(csvText, {
+      header: true, skipEmptyLines: true,
+      complete: result => resolve(result.data),
+      error: err => reject(err)
+    });
+  });
+}
+
 async function refreshFromDrive() {
   if (!accessToken) { tokenClient.requestAccessToken({ prompt: '' }); return; }
   if (!navigator.onLine) { syncMeta.className = 'sync-meta err'; syncMeta.textContent = 'Internet nei — cached data-i use hocche.'; return; }
@@ -268,36 +317,42 @@ async function refreshFromDrive() {
   statusBar.textContent = 'Drive theke notun data fetch hocche...';
 
   try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${DRIVE_FILE_ID}?alt=media`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    if (!res.ok) throw new Error(res.status === 403 ? 'Ei file-e tomar access nei (Drive permission check koro)' : `HTTP ${res.status}`);
-    const csvText = await res.text();
-
-    Papa.parse(csvText, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async result => {
-        dataset = result.data;
-        try {
-          await idbKeyval.set(CACHE_KEY, JSON.stringify(dataset));
-          await idbKeyval.set(CACHE_TIME_KEY, new Date().toISOString());
-        } catch (cacheErr) { /* cache save failed but search still works this session */ }
-        statusBar.className = 'status-bar ok';
-        statusBar.textContent = `✓ Updated — ${dataset.length.toLocaleString()} rows (${new Date().toLocaleString()})`;
-        headerStat.style.display = 'inline-flex';
-        headerStatNum.textContent = dataset.length.toLocaleString();
-        syncMeta.className = 'sync-meta';
-        syncMeta.textContent = `Last updated: ${new Date().toLocaleString()}`;
-      }
-    });
+    dataset = await fetchDriveDataset(DRIVE_FILE_ID);
+    try {
+      await idbKeyval.set(CACHE_KEY, JSON.stringify(dataset));
+      await idbKeyval.set(CACHE_TIME_KEY, new Date().toISOString());
+    } catch (cacheErr) { /* cache save failed but search still works this session */ }
+    statusBar.className = 'status-bar ok';
+    statusBar.textContent = `✓ Updated — ${dataset.length.toLocaleString()} rows (${new Date().toLocaleString()})`;
+    headerStat.style.display = 'inline-flex';
+    headerStatNum.textContent = dataset.length.toLocaleString();
+    syncMeta.className = 'sync-meta';
+    syncMeta.textContent = `Last updated: ${new Date().toLocaleString()}`;
   } catch (e) {
     statusBar.className = 'status-bar';
     statusBar.textContent = 'Update fail hoyeche — ' + e.message + ' (age-r cached data-i thakbe)';
-  } finally {
-    refreshBtn.disabled = false;
-    refreshBtn.classList.remove('spinning');
   }
+
+  if (AD_DRIVE_FILE_ID && AD_DRIVE_FILE_ID !== 'https://docs.google.com/spreadsheets/d/139SujkHE2zOfek1_CVOw0yQmOQKWRF79/edit?usp=sharing&ouid=103417771253976211943&rtpof=true&sd=true') {
+    adStatusBar.style.display = 'block';
+    adStatusBar.className = 'status-bar';
+    adStatusBar.textContent = 'AD data Drive theke fetch hocche...';
+    try {
+      adDataset = await fetchDriveDataset(AD_DRIVE_FILE_ID);
+      try {
+        await idbKeyval.set(AD_CACHE_KEY, JSON.stringify(adDataset));
+        await idbKeyval.set(AD_CACHE_TIME_KEY, new Date().toISOString());
+      } catch (cacheErr) { /* cache save failed but search still works this session */ }
+      adStatusBar.className = 'status-bar ok';
+      adStatusBar.textContent = `✓ AD data updated — ${adDataset.length.toLocaleString()} rows (${new Date().toLocaleString()})`;
+    } catch (e) {
+      adStatusBar.className = 'status-bar';
+      adStatusBar.textContent = 'AD update fail hoyeche — ' + e.message + ' (age-r cached AD data-i thakbe)';
+    }
+  }
+
+  refreshBtn.disabled = false;
+  refreshBtn.classList.remove('spinning');
 }
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
@@ -305,23 +360,88 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active')
 dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('active'); const f = e.dataTransfer.files[0]; if(f) loadFile(f); });
 fileInput.addEventListener('change', e => { if(e.target.files[0]) loadFile(e.target.files[0]); });
 
+let adDataset = [];
+const adDropZone = document.getElementById('adDropZone');
+const adFileInput = document.getElementById('adFileInput');
+const adStatusBar = document.getElementById('adStatusBar');
+
+adDropZone.addEventListener('dragover', e => { e.preventDefault(); adDropZone.classList.add('active'); });
+adDropZone.addEventListener('dragleave', () => adDropZone.classList.remove('active'));
+adDropZone.addEventListener('drop', e => { e.preventDefault(); adDropZone.classList.remove('active'); const f = e.dataTransfer.files[0]; if(f) loadAdFile(f); });
+adFileInput.addEventListener('change', e => { if(e.target.files[0]) loadAdFile(e.target.files[0]); });
+
+function loadAdFile(file) {
+  adStatusBar.style.display = 'block';
+  adStatusBar.className = 'status-bar';
+  adStatusBar.textContent = 'AD data loading...';
+  const isCsv = /\.csv$/i.test(file.name);
+  if (isCsv) {
+    Papa.parse(file, {
+      header: true, skipEmptyLines: true,
+      complete: res => {
+        adDataset = res.data;
+        adStatusBar.className = 'status-bar ok';
+        adStatusBar.textContent = `✓ AD dataset "${file.name}" ready — ${adDataset.length.toLocaleString()} rows`;
+      },
+      error: err => { adStatusBar.textContent = 'AD file error: ' + err.message; }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        adDataset = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
+        adStatusBar.className = 'status-bar ok';
+        adStatusBar.textContent = `✓ AD dataset "${file.name}" ready — ${adDataset.length.toLocaleString()} rows`;
+      } catch (err) {
+        adStatusBar.className = 'status-bar';
+        adStatusBar.textContent = 'AD file error: ' + err.message;
+      }
+    };
+    reader.onerror = () => { adStatusBar.textContent = 'AD file read error'; };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
 document.getElementById('searchInput').addEventListener('keydown', e => { if(e.key === 'Enter') doSearch(); });
 
 function loadFile(file) {
   statusBar.className = 'status-bar';
   statusBar.textContent = 'Loading...';
-  Papa.parse(file, {
-    header: true,
-    skipEmptyLines: true,
-    complete: res => {
-      dataset = res.data;
-      statusBar.className = 'status-bar ok';
-      statusBar.textContent = `✓ "${file.name}" ready to search`;
-      headerStat.style.display = 'inline-flex';
-      headerStatNum.textContent = dataset.length.toLocaleString();
-    },
-    error: err => { statusBar.textContent = 'Error loading file: ' + err.message; }
-  });
+  const isCsv = /\.csv$/i.test(file.name);
+  if (isCsv) {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: res => {
+        dataset = res.data;
+        statusBar.className = 'status-bar ok';
+        statusBar.textContent = `✓ "${file.name}" ready to search`;
+        headerStat.style.display = 'inline-flex';
+        headerStatNum.textContent = dataset.length.toLocaleString();
+      },
+      error: err => { statusBar.textContent = 'Error loading file: ' + err.message; }
+    });
+  } else {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        dataset = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
+        statusBar.className = 'status-bar ok';
+        statusBar.textContent = `✓ "${file.name}" ready to search`;
+        headerStat.style.display = 'inline-flex';
+        headerStatNum.textContent = dataset.length.toLocaleString();
+      } catch (err) {
+        statusBar.className = 'status-bar';
+        statusBar.textContent = 'Error loading file: ' + err.message;
+      }
+    };
+    reader.onerror = () => { statusBar.textContent = 'File read error'; };
+    reader.readAsArrayBuffer(file);
+  }
 }
 
 const SERVICES = [
@@ -351,13 +471,44 @@ function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.ch
 function v(row, key) { return key && row[key] && row[key] !== '' && row[key] !== 'NaN' && row[key] !== 'nan' ? row[key] : null; }
 function vAny(row, keys) { for (const k of keys) { const val = v(row, k); if (val) return val; } return null; }
 
+function parseDateValue(dateStr) {
+  if (!dateStr) return null;
+  let d, useUTC = false;
+  const trimmed = String(dateStr).trim();
+  if (/^\d{4,6}(\.\d+)?$/.test(trimmed)) {
+    // Excel serial date number (cell wasn't formatted as a date in the source file)
+    const serial = parseFloat(trimmed);
+    const utcDays = Math.floor(serial - 25569);
+    d = new Date(utcDays * 86400 * 1000);
+    const fractionalDay = serial - Math.floor(serial);
+    if (fractionalDay > 0) d.setSeconds(d.getSeconds() + Math.round(fractionalDay * 86400));
+    useUTC = true;
+  } else {
+    d = new Date(dateStr);
+  }
+  if (isNaN(d)) return null;
+  return { d, useUTC };
+}
+
+function sortDatesAscending(dates) {
+  return dates.slice().sort((a, b) => {
+    const pa = parseDateValue(a), pb = parseDateValue(b);
+    const ta = pa ? pa.d.getTime() : 0;
+    const tb = pb ? pb.d.getTime() : 0;
+    return ta - tb;
+  });
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return dateStr;
-  const d = new Date(dateStr);
-  if (isNaN(d)) return dateStr;
+  const parsed = parseDateValue(dateStr);
+  if (!parsed) return dateStr;
+  const { d, useUTC } = parsed;
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${day}/${months[d.getMonth()]}/${d.getFullYear()}`;
+  const day = String(useUTC ? d.getUTCDate() : d.getDate()).padStart(2, '0');
+  const month = useUTC ? d.getUTCMonth() : d.getMonth();
+  const year = useUTC ? d.getUTCFullYear() : d.getFullYear();
+  return `${day}/${months[month]}/${year}`;
 }
 
 // working days elapsed since a given date, up to today, excluding Friday & Saturday (HI Bangladesh weekend)
@@ -388,14 +539,14 @@ function getServiceInfo(row, svc) {
   if(!assessDate && !collectDate && !disDate) return null;
 
   const fuDates = (svc.fu || []).map(k => v(row,k)).filter(Boolean);
-  const allSessions = [collectDate, ...fuDates].filter(Boolean).sort();
+  const allSessions = sortDatesAscending([collectDate, ...fuDates].filter(Boolean));
 
   let intervalInfo = '';
   if(allSessions.length >= 2) {
     const gaps = [];
     for(let i=1;i<allSessions.length;i++) {
-      const a = new Date(allSessions[i-1]), b = new Date(allSessions[i]);
-      if(!isNaN(a) && !isNaN(b)) gaps.push(Math.round((b-a)/(1000*60*60*24)));
+      const a = parseDateValue(allSessions[i-1]), b = parseDateValue(allSessions[i]);
+      if(a && b) gaps.push(Math.round((b.d - a.d)/(1000*60*60*24)));
     }
     if(gaps.length) {
       const avg = Math.round(gaps.reduce((s,g)=>s+g,0)/gaps.length);
@@ -419,6 +570,8 @@ function getServiceInfo(row, svc) {
   };
 }
 
+const CARD_NUMBER_KEYS = ['CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard'];
+
 function doSearch() {
   const q = document.getElementById('searchInput').value.trim();
   const resultsDiv = document.getElementById('results');
@@ -430,7 +583,8 @@ function doSearch() {
     const bid = String(r.BNFUniqueID||'').toLowerCase();
     const uid = String(r.Txt_Unique_ID||'').toLowerCase();
     const pid = String(r.ProgressID||'').toLowerCase();
-    return bid === qLow || uid === qLow || pid === qLow || bid.includes(qLow) || uid.includes(qLow);
+    const cid = String(vAny(r, CARD_NUMBER_KEYS)||'').toLowerCase();
+    return bid === qLow || uid === qLow || pid === qLow || cid === qLow || bid.includes(qLow) || uid.includes(qLow);
   });
 
   if(!matches.length) { resultsDiv.style.display='block'; resultsDiv.innerHTML='<div class="no-result"><i class="ti ti-mood-sad" aria-hidden="true" style="font-size:24px;display:block;margin-bottom:8px;color:var(--text-muted, #98958D)"></i>Kono result pawa jay ni — ID ta check koro</div>'; return; }
@@ -445,7 +599,8 @@ function doSearch() {
     html += '<div class="multi-entry-tab">';
     matches.forEach((r,i) => {
       const entryDate = v(r,'CollectData') || '';
-      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">Entry ${i+1}${entryDate?' — '+formatDate(entryDate):''}</button>`;
+      const entryName = v(r,'BNFname') || '';
+      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">${entryName ? entryName : 'Entry '+(i+1)}${entryDate?' — '+formatDate(entryDate):''}</button>`;
     });
     html += '</div>';
   }
@@ -459,7 +614,7 @@ function doSearch() {
     const bnfID = v(row,'BNFUniqueID') || '—';
     const txtUID = v(row,'Txt_Unique_ID') || '—';
     const progressID = v(row,'ProgressID') || v(row,'proGres') || '—';
-    const cardNumber = vAny(row, ['CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard']);
+    const cardNumber = vAny(row, CARD_NUMBER_KEYS);
     const isDuplicate = v(row,'DuplicationBNF')==='yes';
     let dupBarcodes = isDuplicate ? vAny(row, ['DuplicateBarcode','DuplicateBarcodes','DupBarcode','DuplicateBNFID','DuplicateID','DuplicateOf','DuplicateTxtID','DuplicationBarcode','LinkedBarcode','DuplicateUniqueID','DuplicateCardNo','DuplicateCardNumber']) : null;
     if (isDuplicate && !dupBarcodes && name !== '—') {
@@ -557,12 +712,53 @@ function doSearch() {
       servicesHtml = '<div style="font-size:13px;color:var(--text-muted, #98958D);padding:8px 0">Kono service record pawa jay ni</div>';
     }
 
+    let adHtml = '';
+    if (adDataset.length) {
+      const adMatches = adDataset.filter(r => String(v(r,'BNFUniqueID')||'').toLowerCase() === String(bnfID).toLowerCase());
+      if (adMatches.length) {
+        const itemMap = {};
+        let totalQty = 0;
+        adMatches.forEach(r => {
+          const itemName = v(r,'ADItem') || 'Unknown item';
+          const qty = parseFloat(v(r,'ADDonQuan')) || 0;
+          totalQty += qty;
+          if (!itemMap[itemName]) itemMap[itemName] = { qty: 0, entries: [] };
+          itemMap[itemName].qty += qty;
+          const date = v(r,'ADdonDate') || v(r,'SubmissionDate');
+          const provider = v(r,'ADDonCollectName');
+          if (date) itemMap[itemName].entries.push({ date, provider });
+        });
+        const itemNames = Object.keys(itemMap).sort();
+        adHtml += `<div class="kpi-strip" style="margin-top:1.1rem">
+          <div class="kpi-card"><div class="kpi-num">${adMatches.length}</div><div class="kpi-label">AD records</div></div>
+          <div class="kpi-card"><div class="kpi-num">${itemNames.length}</div><div class="kpi-label">Item types</div></div>
+          <div class="kpi-card"><div class="kpi-num">${totalQty % 1 === 0 ? totalQty : totalQty.toFixed(1)}</div><div class="kpi-label">Total quantity</div></div>
+        </div>`;
+        adHtml += '<div class="section-label"><i class="ti ti-wheelchair" aria-hidden="true" style="margin-right:4px"></i>AD items received</div><div class="service-grid">';
+        itemNames.forEach((itemName, ai) => {
+          const info = itemMap[itemName];
+          const sortedEntries = info.entries.slice().sort((a, b) => {
+            const pa = parseDateValue(a.date), pb = parseDateValue(b.date);
+            return (pa ? pa.d.getTime() : 0) - (pb ? pb.d.getTime() : 0);
+          });
+          let rows = `<div class="service-row"><span>Quantity</span><span>${info.qty % 1 === 0 ? info.qty : info.qty.toFixed(1)}</span></div>`;
+          if (sortedEntries.length) {
+            const toggleId = `ad_${idx}_${ai}`;
+            rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>Date &amp; provider</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
+            <div class="session-dropdown" id="${toggleId}">${sortedEntries.map(e => `<div class="session-date-item">${formatDate(e.date)}${e.provider ? ` — ${e.provider}` : ''}</div>`).join('')}</div>`;
+          }
+          adHtml += `<div class="service-card" style="border-left-color:#6366F1"><div class="service-name"><span class="service-dot active"></span>${itemName}</div>${rows}</div>`;
+        });
+        adHtml += '</div>';
+      }
+    }
+
     html += `<div class="bnf-card ${caseClose ? 'case-closed' : 'case-open'}" id="ecard_${idx}" style="${isDup && idx>0?'display:none':''}">
       <div class="bnf-header">
         <div class="bnf-avatar" style="background:${avatarBg}">${initials}</div>
         <div style="flex:1">
           <div class="bnf-name">${name} ${caseStatusHtml}</div>
-          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, block].filter(Boolean).join(' · ')}</div>
+          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, block?`Block: ${block}`:''].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
       <div class="bnf-ids">
@@ -575,6 +771,7 @@ function doSearch() {
       ${kpiHtml}
       ${overviewHtml}
       ${servicesHtml}
+      ${adHtml}
     </div>`;
   });
 
@@ -587,6 +784,15 @@ function toggleCsvUpload() {
   const isOpen = area.style.display !== 'none';
   area.style.display = isOpen ? 'none' : 'block';
   btn.classList.toggle('open', !isOpen);
+}
+
+function toggleAdUpload() {
+  const area = document.getElementById('adDropZone');
+  const btns = document.querySelectorAll('.btn-csv-toggle');
+  const btn = btns[1];
+  const isOpen = area.style.display !== 'none';
+  area.style.display = isOpen ? 'none' : 'block';
+  if (btn) btn.classList.toggle('open', !isOpen);
 }
 
 function toggleSessions(id) {
