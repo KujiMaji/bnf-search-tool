@@ -215,7 +215,16 @@ function dataState(kind) {
   if(kind==='ad') return {bar:adStatusBar,time:adRefreshTime,key:AD_CACHE_KEY,timeKey:AD_CACHE_TIME_KEY,label:'AD'};
   return {bar:statusBar,time:serviceRefreshTime,key:CACHE_KEY,timeKey:CACHE_TIME_KEY,label:'Service'};
 }
+const recordIndexes={ad:new Map(),epg:new Map()};
+const driveVersions={};
+let refreshing=false;
+function indexRecords(rows) {
+  const map=new Map();
+  for(const row of rows) {const id=String(v(row,'BNFUniqueID')||'').trim().toLowerCase();if(!id)continue;if(!map.has(id))map.set(id,[]);map.get(id).push(row);}
+  return map;
+}
 function setData(kind,rows,t) {
+  if(kind==='ad'||kind==='epg') recordIndexes[kind]=indexRecords(rows);
   if(kind==='epg'){epgDataset=rows;epgRefreshTime=t;epgLoaded=true;}
   else if(kind==='ad'){adDataset=rows;adRefreshTime=t;}
   else{dataset=rows;serviceRefreshTime=t;}
@@ -225,11 +234,12 @@ let adRefreshTime = null;
 function timeLabel(t) {
   return t ? new Date(t).toLocaleString('en-GB', {timeZone:'Asia/Dhaka', day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}) + ' (BD)' : 'Unknown';
 }
-function showRefresh(kind, cached=false) {
-  const {bar,time:t,label}=dataState(kind);
-  bar.style.display = 'block'; bar.className = 'status-bar ok';
-  bar.textContent = `${label} last successful refresh: ${timeLabel(t)}${cached ? ' | Saved data' : ''}`;
-  if (kind==='service') { headerStat.style.display='inline-flex'; headerStatNum.textContent = 'Last refresh: ' + timeLabel(t); }
+function showRefresh(kind) {
+  const {bar}=dataState(kind);
+  bar.textContent='';bar.style.display='none';
+  const times=[serviceRefreshTime,adRefreshTime,epgRefreshTime].filter(Boolean);
+  headerStat.style.display='inline-flex';
+  headerStatNum.textContent=times.length ? 'Last updated: '+timeLabel(times.sort()[0])+(times.length<3?' | Some datasets not loaded':'') : 'Not refreshed';
 }
 function normalizeRows(rows) {
   return rows.map(row => Object.fromEntries(Object.entries(row).map(([k,v]) => [k.replace(/[\uFEFF\u200B-\u200D]/g, '').trim(), v == null ? '' : String(v).trim()])));
@@ -241,22 +251,24 @@ function validateRows(rows, kind) {
   if(kind==='epg' && !Object.keys(rows[0]).some(k=>/^EPGDate[1-5]$/i.test(k))) throw new Error('EPGDate1–EPGDate5 columns missing. Check the EPG file / first worksheet.');
   return rows;
 }
-async function acceptRows(rows, kind) {
+async function acceptRows(rows, kind, version=null) {
   rows = validateRows(rows, kind);
   const t = new Date().toISOString();
   setData(kind,rows,t);
   const state=dataState(kind);
   let saved=true;
-  try { await idbKeyval.setMany([[state.key,JSON.stringify(rows)],[state.timeKey,t]]); } catch(e) { saved=false; }
+  try { await idbKeyval.setMany([[state.key,rows],[state.timeKey,t],[state.key+'_driveVersion',version]]); } catch(e) { saved=false; }
+  driveVersions[kind]=saved?version:null;
   showRefresh(kind);
+  if (!saved) state.bar.style.display='block';
   if (!saved) state.bar.textContent += ' | Offline save failed';
-  if(document.getElementById('searchInput').value.trim()) doSearch();
+  if(!refreshing && document.getElementById('searchInput').value.trim()) doSearch();
 }
 window.addEventListener('load', async () => {
   for (const kind of ['service','ad','epg']) {
     try {
       const state=dataState(kind), cached=await idbKeyval.get(state.key), t=await idbKeyval.get(state.timeKey);
-      if(cached) { setData(kind,validateRows(JSON.parse(cached),kind),t); showRefresh(kind,true); }
+      if(cached) { setData(kind,validateRows(typeof cached==='string'?JSON.parse(cached):cached,kind),t); driveVersions[kind]=await idbKeyval.get(state.key+'_driveVersion'); showRefresh(kind,true); }
     } catch(e) {}
   }
   let attempts=0;
@@ -332,32 +344,48 @@ function parseWorkbook(buf) {
   return rows;
 }
 
-async function fetchDriveDataset(fileId) {
+async function fetchDriveDataset(fileId,kind) {
   if(!fileId || fileId.startsWith('YOUR_')) throw new Error('Configure the Drive file ID first.');
   const base=`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
-  const meta=await (await driveRequest(base+'?fields=id,name,mimeType&supportsAllDrives=true')).json();
+  const meta=await (await driveRequest(base+'?fields=id,name,mimeType,modifiedTime,version&supportsAllDrives=true')).json();
+  const version=String(meta.version||meta.modifiedTime||'');
+  if(version && driveVersions[kind]===version) return {unchanged:true};
   if(meta.mimeType==='application/vnd.google-apps.spreadsheet') {
     const res=await driveRequest(base+'/export?mimeType='+encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
-    return parseWorkbook(await res.arrayBuffer());
+    return {rows:parseWorkbook(await res.arrayBuffer()),version};
   }
   const res=await driveRequest(base+'?alt=media&supportsAllDrives=true');
-  if(/\.xlsx?$/i.test(meta.name) || /spreadsheet|excel/.test(meta.mimeType)) return parseWorkbook(await res.arrayBuffer());
-  return parseCsv(await res.text());
+  if(/\.xlsx?$/i.test(meta.name) || /spreadsheet|excel/.test(meta.mimeType)) return {rows:parseWorkbook(await res.arrayBuffer()),version};
+  return {rows:await parseCsv(await res.text()),version};
 }
 async function refreshFromDrive() {
   if(refreshBtn.disabled) return;
   if(!navigator.onLine) { syncMeta.textContent='Offline: saved data is being used.'; return; }
   if(!accessToken) { if(tokenClient) tokenClient.requestAccessToken({prompt:''}); else syncMeta.textContent='Google sign-in is not ready. Reload and try again.'; return; }
   refreshBtn.disabled=true; refreshBtn.classList.add('spinning');
-  let succeeded=0;
+  let succeeded=0; refreshing=true;
+  syncMeta.textContent='Checking for updates...';
   try {
-    for(const [kind,id,bar] of [['service',DRIVE_FILE_ID,statusBar],['ad',AD_DRIVE_FILE_ID,adStatusBar],['epg',EPG_DRIVE_FILE_ID,epgStatusBar]]) {
-      bar.style.display='block'; bar.textContent=`Refreshing ${kind} data...`;
-      try { await acceptRows(await fetchDriveDataset(id),kind); succeeded++; }
-      catch(e) { bar.className='status-bar'; bar.textContent=`${kind} refresh failed: ${e.message} | Previous data retained. Last success: ${timeLabel(dataState(kind).time)}`; }
+    await Promise.all([['service',DRIVE_FILE_ID,statusBar],['ad',AD_DRIVE_FILE_ID,adStatusBar],['epg',EPG_DRIVE_FILE_ID,epgStatusBar]].map(async ([kind,id,bar])=>{
+      bar.style.display='none';
+      try {
+        const result=await fetchDriveDataset(id,kind);
+        if(!result.unchanged) await acceptRows(result.rows,kind,result.version);
+        else showRefresh(kind);
+        succeeded++;
+      } catch(e) {bar.style.display='block';bar.className='status-bar';bar.textContent=`${kind.toUpperCase()} update failed: ${e.message} | Previous data retained.`;}
+    }));
+    if(succeeded===3) {
+      const checkedAt=new Date().toISOString();
+      serviceRefreshTime=adRefreshTime=epgRefreshTime=checkedAt;
+      try {await idbKeyval.setMany([[CACHE_TIME_KEY,checkedAt],[AD_CACHE_TIME_KEY,checkedAt],[EPG_CACHE_TIME_KEY,checkedAt]]);}catch(e){}
+      showRefresh('service');
     }
-    syncMeta.textContent=succeeded===3?'Service, AD and EPG refresh completed.':succeeded>0?'Partial refresh. Check the failed dataset message.':'Refresh failed. Check the messages below.';
-  } finally { refreshBtn.disabled=false; refreshBtn.classList.remove('spinning'); }
+    syncMeta.textContent=succeeded===3?'All datasets are up to date.':succeeded>0?'Some datasets could not update. Previous data retained.':'Update failed. Previous data retained.';
+  } finally {
+    refreshing=false;refreshBtn.disabled=false;refreshBtn.classList.remove('spinning');
+    if(document.getElementById('searchInput').value.trim()) doSearch();
+  }
 }
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
@@ -409,7 +437,21 @@ const AVATAR_GRADIENTS = [
 ];
 function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.charCodeAt(i)) | 0; } return Math.abs(h); }
 
-function v(row,key) { if(!key) return null; const k=Object.keys(row).find(k=>k.replace(/[\uFEFF\u200B-\u200D]/g,'').trim().toLowerCase()===key.toLowerCase()); const value=k==null?'':String(row[k]??'').trim(); return !value || /^(nan|null|undefined)$/i.test(value)?null:value; }
+const rowKeyMaps=new WeakMap();
+const schemaKeyMaps=new Map();
+function v(row,key) {
+  if(!key||!row)return null;
+  let keys=rowKeyMaps.get(row);
+  if(!keys){
+    const names=Object.keys(row),signature=JSON.stringify(names);
+    keys=schemaKeyMaps.get(signature);
+    if(!keys){keys=new Map(names.map(k=>[k.replace(/[\uFEFF\u200B-\u200D]/g,'').trim().toLowerCase(),k]));schemaKeyMaps.set(signature,keys);}
+    rowKeyMaps.set(row,keys);
+  }
+  const k=keys.get(key.toLowerCase());
+  const value=k==null?'':String(row[k]??'').trim();
+  return !value||/^(nan|null|undefined)$/i.test(value)?null:value;
+}
 function vAny(row, keys) { for (const k of keys) { const val = v(row, k); if (val) return val; } return null; }
 
 function parseDateValue(value) {
@@ -428,7 +470,7 @@ function parseDateValue(value) {
       // Source CSV uses M/D/YYYY. Values with a first component >12 are unambiguous D/M/YYYY.
       const a=Number(match[1]),b=Number(match[2]); y=match[3];
       if(a>12){day=a;m=b;}else{m=a;day=b;}
-    } else if((match=t.match(/^(\d{1,2})[ /-]([A-Za-z]{3,9})[ /-](\d{4})$/))) {
+    } else if((match=t.match(/^(\d{1,2})[ /-]([A-Za-z]{3,9})[ /-](\d{4})(?:[ T].*)?$/))) {
       day=match[1];y=match[3];m=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(match[2].slice(0,3).toLowerCase())+1;
     } else return null;
     y=Number(y);m=Number(m);day=Number(day);
@@ -537,7 +579,7 @@ function getServiceInfo(row, svc) {
 function getEpgInfo(row,svc) {
   const id=String(v(row,'BNFUniqueID')||'').trim().toLowerCase();
   if(!id || !epgLoaded) return null;
-  const records=epgDataset.filter(r=>String(v(r,'BNFUniqueID')||'').trim().toLowerCase()===id);
+  const records=recordIndexes.epg.get(id)||[];
   const infos=records.map(r=>getServiceInfo(r,svc)).filter(Boolean);
   if(!infos.length) return null;
   // Repeated exports may repeat the same session date. Count each dated session once.
@@ -686,40 +728,15 @@ function doSearch() {
 
     let adHtml = '';
     if (adDataset.length) {
-      const adMatches = adDataset.filter(r => String(v(r,'BNFUniqueID')||'').toLowerCase() === String(bnfID).toLowerCase());
+      const adMatches = recordIndexes.ad.get(String(bnfID).trim().toLowerCase())||[];
       if (adMatches.length) {
-        const itemMap = Object.create(null);
-        let totalQty = 0;
-        adMatches.forEach(r => {
-          const itemName = v(r,'ADItem') || 'Unknown item';
-          const qty = parseFloat(v(r,'ADDonQuan')) || 0;
-          totalQty += qty;
-          if (!itemMap[itemName]) itemMap[itemName] = { qty: 0, entries: [] };
-          itemMap[itemName].qty += qty;
-          const date = v(r,'ADdonDate') || v(r,'SubmissionDate');
-          const provider = v(r,'ADDonCollectName');
-          itemMap[itemName].entries.push({ date, provider });
-        });
-        const itemNames = Object.keys(itemMap).sort();
-        adHtml += `<div class="kpi-strip" style="margin-top:1.1rem">
-          <div class="kpi-card"><div class="kpi-num">${adMatches.length}</div><div class="kpi-label">AD records</div></div>
-          <div class="kpi-card"><div class="kpi-num">${itemNames.length}</div><div class="kpi-label">Item types</div></div>
-          <div class="kpi-card"><div class="kpi-num">${totalQty % 1 === 0 ? totalQty : totalQty.toFixed(1)}</div><div class="kpi-label">Total quantity</div></div>
-        </div>`;
-        adHtml += '<div class="section-label"><i class="ti ti-wheelchair" aria-hidden="true" style="margin-right:4px"></i>AD items received</div><div class="service-grid">';
-        itemNames.forEach((itemName, ai) => {
-          const info = itemMap[itemName];
-          const sortedEntries = info.entries.slice().sort((a, b) => {
-            const pa = parseDateValue(a.date), pb = parseDateValue(b.date);
-            return (pa ? pa.d.getTime() : Infinity) - (pb ? pb.d.getTime() : Infinity);
-          });
-          let rows = `<div class="service-row"><span>Quantity</span><span>${info.qty % 1 === 0 ? info.qty : info.qty.toFixed(1)}</span></div>`;
-          if (sortedEntries.length) {
-            const toggleId = `ad_${idx}_${ai}`;
-            rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>Date &amp; provider</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
-            <div class="session-dropdown" id="${toggleId}">${sortedEntries.map(e => `<div class="session-date-item">${e.date ? formatDate(e.date) : 'Date not recorded'}${e.provider ? ` — ${e.provider}` : ''}</div>`).join('')}</div>`;
-          }
-          adHtml += `<div class="service-card" style="border-left-color:#6366F1"><div class="service-name"><span class="service-dot active"></span>${itemName}</div>${rows}</div>`;
+        const sortedEntries=adMatches.map((r,i)=>({r,i,date:parseDateValue(v(r,'ADdonDate'))})).sort((a,b)=>(a.date?.d.getTime()??Infinity)-(b.date?.d.getTime()??Infinity)||a.i-b.i);
+        adHtml='<div class="section-label">AD distribution records ('+adMatches.length+')</div><div class="service-grid">';
+        sortedEntries.forEach(({r},i)=>{
+          const item=v(r,'ADItem')||'Not recorded';
+          const date=v(r,'ADdonDate');
+          const fields=[['Barcode',v(r,'BNFUniqueID')],['Distribution date',date?formatDate(date):'Not recorded'],['Quantity',v(r,'ADDonQuan')],['Provider',v(r,'ADDonCollectName')]];
+          adHtml+=`<div class="service-card" style="border-left-color:#6366F1"><div class="service-name">${i+1}. ${escapeText(item)}</div>${fields.map(([label,value])=>`<div class="service-row"><span>${label}</span><span>${escapeText(value??'Not recorded')}</span></div>`).join('')}</div>`;
         });
         adHtml += '</div>';
       }
