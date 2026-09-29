@@ -109,7 +109,11 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 
 .service-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:9px}
 .service-card{background:var(--surface-1, #F6F5F1);border:0.5px solid var(--border, #E7E4DD);border-left:3px solid var(--border, #E7E4DD);border-radius:10px;padding:11px 13px;transition:background 0.15s}
-.service-card.discharged{background:var(--bg-warning, #FEF6E7);border-color:var(--border-warning, #FBD887)}
+.service-card[data-service]{background:var(--service-bg);border-color:var(--service-color);border-left-width:4px}
+.service-card[data-service] .service-name{color:var(--service-color)}
+.session-gap{font-family:var(--font-sans);font-size:11px;color:#595959}
+.session-date-item{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.er-heading{margin:16px 0 8px;font-weight:700;color:#6D28D9}
 .service-name{font-family:'Manrope',var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif);font-size:13px;font-weight:700;color:var(--text-primary, #1A1A18);margin-bottom:7px;display:flex;align-items:center;gap:6px}
 .service-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .service-dot.active{background:#1D9E75}
@@ -431,7 +435,7 @@ const SERVICES = [
   { key: 'Sports', label: 'Sports Session', color: '#84CC16', assess: 'IRSportsdate', collectDate: 'SPVisit1Date', fu: ['SPVisit2Date','SPVisit3Date','SPVisit4Date','SPVisit5Date'], dis: 'SPDisDate', disWhy: 'SPDisReason', sessNum: 'SportsASessNumPlan' },
   { key: 'STA', label: 'Stimulation', color: '#06B6D4', assess: 'IRstimulationdate', collectDate: 'STADate', fu: Array.from({length:10},(_,i)=>`STFU${i+1}Date`), dis: 'STFDisDate', disWhy: 'STFDisReason', priority: 'STAPriority', sessNum: 'STASessNumPlan' },
   { key: 'PO', label: 'Prosthetics & Orthotics', color: '#D946EF', assess: 'IRPOdate', collectDate: 'POADate', fu: Array.from({length:10},(_,i)=>`POFU${i+1}Date`), dis: 'PODisDate', disWhy: 'PODisReason', priority: 'POAPriority', sessNum: 'POASessNumPlan' },
-  { key: 'PCA', label: 'Personal Care Assistance', color: '#F43F5E', assess: null, collectDate: 'PCADate', fu: ['PCFU1Date','PCFU2Date','PCFU3Date','PCFU4Date'], dis: 'PCDisDate', disWhy: 'PCDisReason' },
+  { key: 'PCA', label: 'Peer to Peer', color: '#F43F5E', assess: null, collectDate: 'PCADate', fu: ['PCFU1Date','PCFU2Date','PCFU3Date','PCFU4Date'], dis: 'PCDisDate', disWhy: 'PCDisReason' },
   { key: 'EPG', label: 'EPG Session', color: '#0891B2', assess: null, collectDate: 'EPGDate1', fu: ['EPGDate2','EPGDate3','EPGDate4','EPGDate5'], dis: 'EPGDisDate', disWhy: null },
 ];
 
@@ -590,6 +594,29 @@ function getEpgInfo(row,svc) {
 
 const CARD_NUMBER_KEYS = ['Cardnum','CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard'];
 
+function sessionDatesHtml(dates) {
+  return dates.map((date,i)=>{
+    const current=parseDateValue(date),previous=i?parseDateValue(dates[i-1]):null;
+    const gap=i===0?'First session':current&&previous?`${Math.round((current.d-previous.d)/86400000)} days after previous session`:'Gap unavailable';
+    return `<div class="session-date-item"><span>${formatDate(date)}</span><span class="session-gap">${gap}</span></div>`;
+  }).join('');
+}
+const ER_SECTORS = [["ERHealth", "Health", "ERHelathName"], ["ERNutrition", "Nutrition", "ERNutritionName"], ["ERMHPSS", "MHPSS", "ERMHPSSName"], ["ERProt", "Protection", "ERProtName"], ["ERCM", "Case Management", "ERCMName"], ["ERFamReunionification", "Family Reunification", "ERFamReunionficationName"], ["ERRehab", "Rehabilitation", "ERRehabName"], ["ERNFI", "Non-food Items", "ERNFIName"], ["ERShelter", "Shelter", "ERShelterName"], ["ERFood", "Food", "ERFoodName"], ["ERIncome", "Income / Livelihoods", "ERIncomeName"], ["EReducation", "Education", "EReducationName"], ["ERLegal", "Legal", "ERLegalName"], ["ERPsychosocial_support", "Psychosocial Support", "ERPsychosocial_supportName"], ["ERWaSH", "WaSH", "ERWaSHName"]];
+function getReferrals(row) {
+  return ER_SECTORS.map(([prefix,sector,staffKey])=>({sector,date:v(row,prefix+'date'),organisation:v(row,prefix+'Yes'),priority:v(row,prefix+'prioritylevel'),followup:v(row,prefix+'FUdate'),status:v(row,prefix+'status'),staff:v(row,staffKey)}))
+    .filter(r=>r.date||r.followup||r.organisation&&!/^(no|0|false)$/i.test(r.organisation))
+    .sort((a,b)=>(parseDateValue(a.date)?.d.getTime()??Infinity)-(parseDateValue(b.date)?.d.getTime()??Infinity));
+}
+function referralsHtml(row) {
+  const refs=getReferrals(row);
+  if(!refs.length)return '';
+  const cards=refs.map(r=>{
+    const fields=[['Referred to',r.organisation&&!/^(yes|1|true|no|0|false)$/i.test(r.organisation)?r.organisation:'Not recorded'],['Referral date',r.date?formatDate(r.date):'Not recorded'],['Priority',r.priority||'Not recorded'],['Follow-up date',r.followup?formatDate(r.followup):'Not recorded'],['Status',r.status||'Not recorded'],['Referred by',r.staff||'Not recorded']];
+    return `<div class="service-card" style="border-left-color:#8B5CF6"><div class="service-name">${escapeText(r.sector)}</div>${fields.map(([label,value])=>`<div class="service-row"><span>${label}</span><span>${escapeText(value)}</span></div>`).join('')}</div>`;
+  }).join('');
+  return `<div class="er-heading">External Referrals (${refs.length})</div><div class="service-grid">${cards}</div>`;
+}
+
 function doSearch() {
   const q = document.getElementById('searchInput').value.trim();
   const resultsDiv = document.getElementById('results');
@@ -699,7 +726,7 @@ function doSearch() {
         if(info.allSessions && info.allSessions.length > 0) {
           const toggleId = `sess_${idx}_${svc.key}`;
           rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>All session dates</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
-          <div class="session-dropdown" id="${toggleId}">${info.allSessions.map(d => `<div class="session-date-item">${formatDate(d)}</div>`).join('')}</div>`;
+          <div class="session-dropdown" id="${toggleId}">${sessionDatesHtml(info.allSessions)}</div>`;
         }
         if(info.invalidDateCount) rows += `<div class="service-row"><span>Dates unavailable</span><span>${info.invalidDateCount} session(s); check source file</span></div>`;
         rows += `<div class="service-row"><span>Day frequency</span><span>${dayFrequency(info)}</span></div>`;
@@ -713,7 +740,7 @@ function doSearch() {
         if(info.cause) rows += `<div class="service-row"><span>Condition/cause</span><span>${escapeText(info.cause)}</span></div>`;
         if(info.caseType) rows += `<div class="service-row"><span>Case type</span><span>${escapeText(info.caseType)}</span></div>`;
 
-        servicesHtml += `<div class="service-card${info.discharged ? ' discharged' : ''}" style="border-left-color:${svc.color}"><div class="service-name"><span class="service-dot ${dotClass}"></span>${svc.label}</div>${rows}</div>`;
+        servicesHtml += `<div class="service-card${info.discharged ? ' discharged' : ''}" data-service="${svc.key}" style="--service-color:${svc.color};--service-bg:${svc.color}12;border-left-color:${svc.color}"><div class="service-name"><span class="service-dot ${dotClass}"></span>${svc.label}</div>${rows}</div>`;
       });
       servicesHtml += '</div>';
     } else {
@@ -756,6 +783,7 @@ function doSearch() {
       ${kpiHtml}
       ${overviewHtml}
       ${servicesHtml}
+      ${referralsHtml(row)}
       ${adHtml}
     </div>`;
   });
