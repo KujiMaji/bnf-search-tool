@@ -15,7 +15,7 @@
 </head>
 <body>
 
-<h2 class="sr-only">Beneficiary Search Engine</h2>
+
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/dist/tabler-icons.min.css">
 
@@ -144,31 +144,17 @@ body{font-family:var(--font-sans, -apple-system,BlinkMacSystemFont,'Segoe UI',Ro
   </div>
 
   <div class="toolbar-card">
-    <button class="btn-csv-toggle" onclick="toggleCsvUpload()">
-      <i class="ti ti-file-text" aria-hidden="true"></i> Reporting Dataset
-      <i class="ti ti-chevron-down" id="csvToggleIcon" aria-hidden="true" style="margin-left:auto"></i>
-    </button>
-    <div class="upload-area" id="dropZone" style="display:none" onclick="document.getElementById('fileInput').click()">
-      <div class="upload-icon"><i class="ti ti-file-text" aria-hidden="true"></i></div>
-      <div class="upload-text">Excel/CSV file drop koro ba <span>click kore select koro</span></div>
-    </div>
-    <input type="file" id="fileInput" class="file-input" accept=".csv,.xlsx,.xls">
-
-    <button class="btn-csv-toggle" onclick="toggleAdUpload()">
-      <i class="ti ti-wheelchair" aria-hidden="true"></i> AD Dataset Upload (Excel/CSV)
-      <i class="ti ti-chevron-down" id="adToggleIcon" aria-hidden="true" style="margin-left:auto"></i>
-    </button>
-    <div class="upload-area" id="adDropZone" style="display:none" onclick="document.getElementById('adFileInput').click()">
-      <div class="upload-icon"><i class="ti ti-wheelchair" aria-hidden="true"></i></div>
-      <div class="upload-text">AD Excel/CSV file drop koro ba <span>click kore select koro</span></div>
-      <div class="upload-hint" style="font-size:11.5px;color:var(--text-muted, #98958D);margin-top:4px">.xlsx, .xls, ba .csv — BNFUniqueID column diye service data-r shathe match hobe</div>
-    </div>
-    <input type="file" id="adFileInput" class="file-input" accept=".xlsx,.xls,.csv">
+    <label class="btn-csv-toggle" id="dropZone" style="display:block;margin-top:12px">Reporting Dataset
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display:block;margin-top:8px;max-width:100%">
+    </label>
+    <label class="btn-csv-toggle" id="adDropZone" style="display:block;margin-top:12px">AD Dataset Upload (Excel/CSV)
+      <input type="file" id="adFileInput" accept=".csv,.xlsx,.xls" style="display:block;margin-top:8px;max-width:100%">
+    </label>
     <div class="status-bar" id="adStatusBar" style="display:none"></div>
     <label class="btn-csv-toggle" style="display:block;margin-top:12px">EPG Dataset Upload (Excel/CSV)
       <input type="file" accept=".csv,.xlsx,.xls" onchange="if(this.files[0]) loadLocal(this.files[0],'epg')" style="display:block;margin-top:8px;max-width:100%">
     </label>
-    <div class="status-bar" id="epgStatusBar">EPG: not loaded yet. Sign in and Update, or upload the EPG file.</div>
+    <div class="status-bar" id="epgStatusBar">EPG data load korte file select korun ba sign in kore Update chapun.</div>
 
     <div class="drive-sync-box" id="driveSyncBox">
       <div class="drive-sync-row">
@@ -246,7 +232,7 @@ function showRefresh(kind, cached=false) {
   if (kind==='service') { headerStat.style.display='inline-flex'; headerStatNum.textContent = 'Last refresh: ' + timeLabel(t); }
 }
 function normalizeRows(rows) {
-  return rows.map(row => Object.fromEntries(Object.entries(row).map(([k,v]) => [k.replace(/^\uFEFF/, '').trim(), v == null ? '' : String(v).trim()])));
+  return rows.map(row => Object.fromEntries(Object.entries(row).map(([k,v]) => [k.replace(/[\uFEFF\u200B-\u200D]/g, '').trim(), v == null ? '' : String(v).trim()])));
 }
 function validateRows(rows, kind) {
   rows = normalizeRows(rows);
@@ -335,9 +321,17 @@ function parseCsv(text) {
   return new Promise((resolve,reject)=>Papa.parse(text,{header:true,skipEmptyLines:'greedy',complete:r=>r.errors.length?reject(new Error('CSV: '+r.errors[0].message)):resolve(r.data),error:reject}));
 }
 function parseWorkbook(buf) {
-  const wb=XLSX.read(buf,{type:'array',cellDates:true});
-  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'',raw:false,dateNF:'yyyy-mm-dd'});
+  const wb=XLSX.read(buf,{type:'array',cellDates:false});
+  const sheet=wb.Sheets[wb.SheetNames[0]];
+  const rows=XLSX.utils.sheet_to_json(sheet,{defval:'',raw:true});
+  const date1904=!!wb.Workbook?.WBProps?.date1904;
+  // Dates remain serial numbers so display formats / narrow Excel columns cannot alter them.
+  if(date1904) for(const row of rows) for(const key of Object.keys(row)) {
+    if(/date/i.test(key) && typeof row[key]==='number') row[key]+=1462;
+  }
+  return rows;
 }
+
 async function fetchDriveDataset(fileId) {
   if(!fileId || fileId.startsWith('YOUR_')) throw new Error('Configure the Drive file ID first.');
   const base=`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
@@ -393,7 +387,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => { if(e.k
 
 const SERVICES = [
   { key: 'Rehab', label: 'Rehabilitation', color: '#6366F1', assess: 'IRRehabdate', collectDate: 'CollectDataA', fu: Array.from({length:20},(_,i)=>`RehabFU${i+1}date`), dis: 'RehabDisdate', disWhy: 'RehabDisWhy', condition: 'RehabAcondition', priority: 'RehabApriority', sessNum: 'RehabASessNumPlan' },
-  { key: 'PSS', label: 'PSS (Psychosocial)', color: '#14B8A6', assess: 'IRPSSdate', collectDate: 'PSSACollectDate', fu: Array.from({length:15},(_,i)=>`PSSFU${i+1}date`), dis: 'PSSdisdate', disWhy: null, priority: 'PSSAlevelofpriority', sessNum: 'PSSASessNumPlan' },
+  { key: 'PSS', label: 'PSS (Psychosocial)', color: '#14B8A6', assess: 'IRPSSdate', collectDate: 'PSSACollectDate', fu: Array.from({length:15},(_,i)=>`PSSFU${i+1}date`), dis: 'PSSdischargeDate', disWhy: 'PSSdisdate', priority: 'PSSAlevelofpriority', sessNum: 'PSSASessNumPlan' },
   { key: 'Prot', label: 'Protection', color: '#8B5CF6', assess: 'IRProtdate', collectDate: 'ProtACollectDate', fu: Array.from({length:4},(_,i)=>`ProtFU${i+1}date`), dis: 'Protdisdate', disWhy: 'Protdisreason', caseType: 'ProtAcasetype', priority: 'ProtApriority', sessNum: 'ProtASessNumPlan' },
   { key: 'SLT', label: 'Speech & Language', color: '#EC4899', assess: 'IRSLTdate', collectDate: 'SLTADate', fu: Array.from({length:20},(_,i)=>`SLTFU${i+1}Date`), dis: 'SLTDisDate', disWhy: 'SLTDisWhy', priority: 'SLTAPriority', sessNum: 'SLTTSessionNeed' },
   { key: 'Eye', label: 'Eye Care', color: '#0EA5E9', assess: 'IREyedate', collectDate: 'EyeADate', fu: Array.from({length:4},(_,i)=>`EyeFU${i+1}Date`), dis: 'EyeDisDate', disWhy: 'EyeDisReason', cause: 'EyeMainCause', sessNum: 'EyeASessNumPlan' },
@@ -415,30 +409,33 @@ const AVATAR_GRADIENTS = [
 ];
 function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.charCodeAt(i)) | 0; } return Math.abs(h); }
 
-function v(row,key) { if(!key) return null; const k=Object.keys(row).find(k=>k.toLowerCase()===key.toLowerCase()); const value=k==null?'':String(row[k]??'').trim(); return !value || /^(nan|null|undefined)$/i.test(value)?null:value; }
+function v(row,key) { if(!key) return null; const k=Object.keys(row).find(k=>k.replace(/[\uFEFF\u200B-\u200D]/g,'').trim().toLowerCase()===key.toLowerCase()); const value=k==null?'':String(row[k]??'').trim(); return !value || /^(nan|null|undefined)$/i.test(value)?null:value; }
 function vAny(row, keys) { for (const k of keys) { const val = v(row, k); if (val) return val; } return null; }
 
-function parseDateValue(dateStr) {
-  if (!dateStr) return null;
-  let d, useUTC = false;
-  const trimmed = String(dateStr).trim();
-  if (/^\d{4,6}(\.\d+)?$/.test(trimmed)) {
-    // Excel serial date number (cell wasn't formatted as a date in the source file)
-    const serial = parseFloat(trimmed);
-    const utcDays = Math.floor(serial - 25569);
-    d = new Date(utcDays * 86400 * 1000);
-    const fractionalDay = serial - Math.floor(serial);
-    if (fractionalDay > 0) d.setSeconds(d.getSeconds() + Math.round(fractionalDay * 86400));
-    useUTC = true;
-  } else if (/^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(trimmed)) {
-    const [day,month,year]=trimmed.split(/[/-]/).map(Number);
-    d=new Date(Date.UTC(year,month-1,day)); useUTC=true;
-    if(d.getUTCDate()!==day || d.getUTCMonth()!==month-1) return null;
+function parseDateValue(value) {
+  if(value==null || value==='') return null;
+  const t=String(value).trim();
+  if(/^#+$/.test(t)) return null;
+  let d;
+  if(/^\d{4,6}(\.\d+)?$/.test(t)) {
+    d=new Date(Math.round((Number(t)-25569)*86400000));
+    if(isNaN(d)) return null;
+    d=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()));
   } else {
-    d = new Date(dateStr);
+    let y,m,day,match;
+    if((match=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/))) [,y,m,day]=match;
+    else if((match=t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+.*)?$/))) {
+      // Source CSV uses M/D/YYYY. Values with a first component >12 are unambiguous D/M/YYYY.
+      const a=Number(match[1]),b=Number(match[2]); y=match[3];
+      if(a>12){day=a;m=b;}else{m=a;day=b;}
+    } else if((match=t.match(/^(\d{1,2})[ /-]([A-Za-z]{3,9})[ /-](\d{4})$/))) {
+      day=match[1];y=match[3];m=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(match[2].slice(0,3).toLowerCase())+1;
+    } else return null;
+    y=Number(y);m=Number(m);day=Number(day);
+    d=new Date(Date.UTC(y,m-1,day));
+    if(m<1 || m>12 || d.getUTCFullYear()!==y || d.getUTCMonth()!==m-1 || d.getUTCDate()!==day) return null;
   }
-  if (isNaN(d)) return null;
-  return { d, useUTC };
+  return {d,useUTC:true};
 }
 
 function sortDatesAscending(dates) {
@@ -453,7 +450,7 @@ function sortDatesAscending(dates) {
 function formatDate(dateStr) {
   if (!dateStr) return dateStr;
   const parsed = parseDateValue(dateStr);
-  if (!parsed) return dateStr;
+  if (!parsed) return 'Date unavailable';
   const { d, useUTC } = parsed;
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const day = String(useUTC ? d.getUTCDate() : d.getDate()).padStart(2, '0');
@@ -484,6 +481,17 @@ function workingDaysSince(dateStr) {
   return count;
 }
 
+function escapeText(value) {
+  return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function dayFrequency(info) {
+  if(info.invalidDateCount) return 'Date missing or invalid';
+  if(info.sessionCount<2) return 'At least 2 sessions required';
+  const first=parseDateValue(info.firstSession),last=parseDateValue(info.lastSession);
+  if(!first || !last) return 'Date unavailable';
+  return ((last.d-first.d)/86400000/(info.sessionCount-1)).toFixed(2)+' days';
+}
+
 function getServiceInfo(row, svc) {
   const assessDate = v(row, svc.assess);
   const collectDate = v(row, svc.collectDate);
@@ -492,7 +500,8 @@ function getServiceInfo(row, svc) {
   if(!assessDate && !collectDate && !disDate && !(svc.fu||[]).some(k=>v(row,k))) return null;
 
   const fuDates = (svc.fu || []).map(k => v(row,k)).filter(Boolean);
-  const allSessions = sortDatesAscending([collectDate, ...fuDates].filter(Boolean));
+  const recordedSessions = [collectDate, ...fuDates].filter(Boolean);
+  const allSessions = sortDatesAscending(recordedSessions.filter(d=>parseDateValue(d)));
 
   let intervalInfo = '';
   if(allSessions.length >= 2) {
@@ -510,7 +519,8 @@ function getServiceInfo(row, svc) {
   return {
     assessed: assessDate,
     firstSession: allSessions[0],
-    sessionCount: allSessions.length,
+    sessionCount: recordedSessions.length,
+    invalidDateCount: recordedSessions.length-allSessions.length,
     lastSession: allSessions[allSessions.length-1] || null,
     discharged: disDate,
     dischargeReason: disWhy,
@@ -539,7 +549,7 @@ function getEpgInfo(row,svc) {
   const discharged=sortDatesAscending(infos.map(i=>i.discharged).filter(Boolean)).at(-1)||null;
   let intervalInfo='';
   if(dates.length>1){const first=parseDateValue(dates[0]),last=parseDateValue(dates.at(-1)); if(first&&last) intervalInfo=`avg ${Math.round((last.d-first.d)/86400000/(dates.length-1))} days between sessions`;}
-  return {...infos[0],allSessions:dates,firstSession:dates[0]||null,lastSession:dates.at(-1)||null,sessionCount:dates.length,discharged,intervalInfo};
+  return {...infos[0],allSessions:dates,firstSession:dates[0]||null,lastSession:dates.at(-1)||null,sessionCount:dates.length,invalidDateCount:infos.reduce((sum,i)=>sum+(i.invalidDateCount||0),0),discharged,intervalInfo};
 }
 
 const CARD_NUMBER_KEYS = ['Cardnum','CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard'];
@@ -579,7 +589,7 @@ function doSearch() {
     const age = v(row,'BNFage') || '';
     const sex = v(row,'BNFsex') || '';
     const camp = v(row,'hhsitename') || '';
-    const block = vAny(row,['hhlocalblock','LocalBlock','Local Block','hhblock']) || '';
+    const block = v(row,'hhlocalblock') || 'Not recorded';
     const bnfID = v(row,'BNFUniqueID') || '—';
     const txtUID = v(row,'Txt_Unique_ID') || '—';
     const progressID = v(row,'ProgressID') || v(row,'proGres') || '—';
@@ -648,15 +658,15 @@ function doSearch() {
         let rows = '';
         if(info.assessed) rows += `<div class="service-row"><span>IR/Assessment date</span><span>${formatDate(info.assessed)}</span></div>`;
         if(info.firstSession) rows += `<div class="service-row"><span>First session</span><span>${formatDate(info.firstSession)}</span></div>`;
-        if(info.lastSession && info.lastSession !== info.firstSession) rows += `<div class="service-row"><span>Last session</span><span>${formatDate(info.lastSession)}</span></div>`;
+        if(info.lastSession) rows += `<div class="service-row"><span>Last session</span><span>${formatDate(info.lastSession)}</span></div>`;
         if(info.sessionCount > 1) rows += `<div class="service-row"><span>Total sessions</span><span>${info.sessionCount}</span></div>`;
         if(info.allSessions && info.allSessions.length > 0) {
           const toggleId = `sess_${idx}_${svc.key}`;
           rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>All session dates</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
           <div class="session-dropdown" id="${toggleId}">${info.allSessions.map(d => `<div class="session-date-item">${formatDate(d)}</div>`).join('')}</div>`;
         }
-        if(info.intervalInfo) rows += `<div class="service-row"><span>Session interval</span><span>${info.intervalInfo}</span></div>`;
-        if(info.sessNumPlan) rows += `<div class="service-row"><span>Sessions planned</span><span>${info.sessNumPlan}</span></div>`;
+        if(info.invalidDateCount) rows += `<div class="service-row"><span>Dates unavailable</span><span>${info.invalidDateCount} session(s); check source file</span></div>`;
+        rows += `<div class="service-row"><span>Day frequency</span><span>${dayFrequency(info)}</span></div>`;
         if(!info.discharged) {
           const wd = workingDaysSince(info.lastSession || info.firstSession);
           if (wd !== null) rows += `<div class="service-row"><span>Days since last session</span><span>${wd} working days</span></div>`;
@@ -667,21 +677,13 @@ function doSearch() {
         if(info.cause) rows += `<div class="service-row"><span>Condition/cause</span><span>${info.cause}</span></div>`;
         if(info.caseType) rows += `<div class="service-row"><span>Case type</span><span>${info.caseType}</span></div>`;
 
-        let progressHtml = '';
-        const planNum = parseFloat(info.sessNumPlan);
-        if(!isNaN(planNum) && planNum > 0) {
-          const pct = Math.min(100, Math.round((info.sessionCount / planNum) * 100));
-          progressHtml = `<div class="progress-track"><div class="progress-fill" style="width:${pct}%;background:${info.discharged ? 'var(--text-warning, #B45309)' : svc.color}"></div></div>`;
-        }
-
-        servicesHtml += `<div class="service-card${info.discharged ? ' discharged' : ''}" style="border-left-color:${svc.color}"><div class="service-name"><span class="service-dot ${dotClass}"></span>${svc.label}</div>${rows}${progressHtml}</div>`;
+        servicesHtml += `<div class="service-card${info.discharged ? ' discharged' : ''}" style="border-left-color:${svc.color}"><div class="service-name"><span class="service-dot ${dotClass}"></span>${svc.label}</div>${rows}</div>`;
       });
       servicesHtml += '</div>';
     } else {
       servicesHtml = '<div style="font-size:13px;color:var(--text-muted, #98958D);padding:8px 0">Kono service record pawa jay ni</div>';
     }
 
-    servicesHtml += `<div style="font-size:12px;padding:8px 0">EPG source: unhcr_epg_reporting_dataset · ${!epgLoaded ? 'Not loaded; main dataset EPG is excluded.' : activeServices.some(s=>s.svc.key==='EPG') ? 'Matched by Barcode / BNFUniqueID.' : 'No EPG session record found for this barcode.'}</div>`;
     let adHtml = '';
     if (adDataset.length) {
       const adMatches = adDataset.filter(r => String(v(r,'BNFUniqueID')||'').toLowerCase() === String(bnfID).toLowerCase());
@@ -728,10 +730,12 @@ function doSearch() {
         <div class="bnf-avatar" style="background:${avatarBg}">${initials}</div>
         <div style="flex:1">
           <div class="bnf-name">${name} ${caseStatusHtml}</div>
-          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, block?`Block: ${block}`:''].filter(Boolean).join(' · ')}</div>
+          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, `Local block: ${block}`].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
       <div class="bnf-ids">
+        <div class="id-badge"><strong>Identified by</strong>${escapeText(v(row,'CollectName') || 'Not recorded')}</div>
+        <div class="id-badge"><strong>Identification date</strong>${v(row,'CollectData') ? formatDate(v(row,'CollectData')) : 'Not recorded'}</div>
         <div class="id-badge"><strong>Barcode / BNF ID</strong>${bnfID}</div>
         <div class="id-badge"><strong>Unique ID</strong>${txtUID}</div>
         <div class="id-badge"><strong>Progress ID</strong>${progressID}</div>
