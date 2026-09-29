@@ -242,7 +242,14 @@ function showRefresh(kind) {
   headerStatNum.textContent=times.length ? 'Last updated: '+timeLabel(times.sort()[0])+(times.length<3?' | Some datasets not loaded':'') : 'Not refreshed';
 }
 function normalizeRows(rows) {
-  return rows.map(row => Object.fromEntries(Object.entries(row).map(([k,v]) => [k.replace(/[\uFEFF\u200B-\u200D]/g, '').trim(), v == null ? '' : String(v).trim()])));
+  // Normalize in place: avoid keeping a second full copy of a large dataset.
+  for(const row of rows) for(const key of Object.keys(row)) {
+    const clean=key.replace(/[\uFEFF\u200B-\u200D]/g,'').trim().toLowerCase();
+    const value=row[key]==null?'':String(row[key]).trim();
+    if(clean!==key)delete row[key];
+    row[clean]=value;
+  }
+  return rows;
 }
 function validateRows(rows, kind) {
   rows = normalizeRows(rows);
@@ -333,13 +340,13 @@ function parseCsv(text) {
   return new Promise((resolve,reject)=>Papa.parse(text,{header:true,skipEmptyLines:'greedy',complete:r=>r.errors.length?reject(new Error('CSV: '+r.errors[0].message)):resolve(r.data),error:reject}));
 }
 function parseWorkbook(buf) {
-  const wb=XLSX.read(buf,{type:'array',cellDates:false});
+  const wb=XLSX.read(buf,{type:'array',cellDates:false,sheets:0,cellStyles:false,cellHTML:false,cellNF:false,cellText:false});
   const sheet=wb.Sheets[wb.SheetNames[0]];
-  const rows=XLSX.utils.sheet_to_json(sheet,{defval:'',raw:true});
+  const rows=XLSX.utils.sheet_to_json(sheet,{raw:true});
   const date1904=!!wb.Workbook?.WBProps?.date1904;
   // Dates remain serial numbers so display formats / narrow Excel columns cannot alter them.
   if(date1904) for(const row of rows) for(const key of Object.keys(row)) {
-    if(/date/i.test(key) && typeof row[key]==='number') row[key]+=1462;
+    if(/date|^CollectData(?:A)?$/i.test(key) && typeof row[key]==='number') row[key]+=1462;
   }
   return rows;
 }
@@ -366,7 +373,7 @@ async function refreshFromDrive() {
   let succeeded=0; refreshing=true;
   syncMeta.textContent='Checking for updates...';
   try {
-    await Promise.all([['service',DRIVE_FILE_ID,statusBar],['ad',AD_DRIVE_FILE_ID,adStatusBar],['epg',EPG_DRIVE_FILE_ID,epgStatusBar]].map(async ([kind,id,bar])=>{
+    for(const [kind,id,bar] of [['service',DRIVE_FILE_ID,statusBar],['ad',AD_DRIVE_FILE_ID,adStatusBar],['epg',EPG_DRIVE_FILE_ID,epgStatusBar]]) {
       bar.style.display='none';
       try {
         const result=await fetchDriveDataset(id,kind);
@@ -374,7 +381,8 @@ async function refreshFromDrive() {
         else showRefresh(kind);
         succeeded++;
       } catch(e) {bar.style.display='block';bar.className='status-bar';bar.textContent=`${kind.toUpperCase()} update failed: ${e.message} | Previous data retained.`;}
-    }));
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
     if(succeeded===3) {
       const checkedAt=new Date().toISOString();
       serviceRefreshTime=adRefreshTime=epgRefreshTime=checkedAt;
@@ -437,19 +445,9 @@ const AVATAR_GRADIENTS = [
 ];
 function hashStr(s) { let h = 0; for (let i=0;i<s.length;i++) { h = (h*31 + s.charCodeAt(i)) | 0; } return Math.abs(h); }
 
-const rowKeyMaps=new WeakMap();
-const schemaKeyMaps=new Map();
 function v(row,key) {
   if(!key||!row)return null;
-  let keys=rowKeyMaps.get(row);
-  if(!keys){
-    const names=Object.keys(row),signature=JSON.stringify(names);
-    keys=schemaKeyMaps.get(signature);
-    if(!keys){keys=new Map(names.map(k=>[k.replace(/[\uFEFF\u200B-\u200D]/g,'').trim().toLowerCase(),k]));schemaKeyMaps.set(signature,keys);}
-    rowKeyMaps.set(row,keys);
-  }
-  const k=keys.get(key.toLowerCase());
-  const value=k==null?'':String(row[k]??'').trim();
+  const value=String(row[key.toLowerCase()]??row[key]??'').trim();
   return !value||/^(nan|null|undefined)$/i.test(value)?null:value;
 }
 function vAny(row, keys) { for (const k of keys) { const val = v(row, k); if (val) return val; } return null; }
@@ -582,16 +580,12 @@ function getEpgInfo(row,svc) {
   const records=recordIndexes.epg.get(id)||[];
   const infos=records.map(r=>getServiceInfo(r,svc)).filter(Boolean);
   if(!infos.length) return null;
-  // Repeated exports may repeat the same session date. Count each dated session once.
-  const seen=new Set();
-  const dates=sortDatesAscending(infos.flatMap(i=>i.allSessions)).filter(d=>{
-    const parsed=parseDateValue(d), key=parsed?formatDate(d):String(d);
-    if(seen.has(key)) return false; seen.add(key); return true;
-  });
+  // Each populated session column is a session, even when dates coincide.
+  const dates=sortDatesAscending(infos.flatMap(i=>i.allSessions));
   const discharged=sortDatesAscending(infos.map(i=>i.discharged).filter(Boolean)).at(-1)||null;
   let intervalInfo='';
   if(dates.length>1){const first=parseDateValue(dates[0]),last=parseDateValue(dates.at(-1)); if(first&&last) intervalInfo=`avg ${Math.round((last.d-first.d)/86400000/(dates.length-1))} days between sessions`;}
-  return {...infos[0],allSessions:dates,firstSession:dates[0]||null,lastSession:dates.at(-1)||null,sessionCount:dates.length,invalidDateCount:infos.reduce((sum,i)=>sum+(i.invalidDateCount||0),0),discharged,intervalInfo};
+  return {...infos[0],allSessions:dates,firstSession:dates[0]||null,lastSession:dates.at(-1)||null,sessionCount:infos.reduce((sum,i)=>sum+i.sessionCount,0),invalidDateCount:infos.reduce((sum,i)=>sum+(i.invalidDateCount||0),0),discharged,intervalInfo};
 }
 
 const CARD_NUMBER_KEYS = ['Cardnum','CardNumber','CardNo','Card_Number','Card_No','BNFCardNumber','BNFCardNo','CardNum','Card No','Card Number','BNFCard'];
@@ -621,7 +615,7 @@ function doSearch() {
     matches.forEach((r,i) => {
       const entryDate = v(r,'CollectData') || '';
       const entryName = v(r,'BNFname') || '';
-      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">${entryName ? entryName : 'Entry '+(i+1)} · ${v(r,'BNFUniqueID') || ''}${entryDate?' — '+formatDate(entryDate):''}</button>`;
+      html += `<button class="entry-btn${i===0?' active':''}" onclick="showEntry(${i})" id="etab_${i}">${escapeText(entryName ? entryName : 'Entry '+(i+1))} · ${escapeText(v(r,'BNFUniqueID') || '')}${entryDate?' — '+formatDate(entryDate):''}</button>`;
     });
     html += '</div>';
   }
@@ -701,7 +695,7 @@ function doSearch() {
         if(info.assessed) rows += `<div class="service-row"><span>IR/Assessment date</span><span>${formatDate(info.assessed)}</span></div>`;
         if(info.firstSession) rows += `<div class="service-row"><span>First session</span><span>${formatDate(info.firstSession)}</span></div>`;
         if(info.lastSession) rows += `<div class="service-row"><span>Last session</span><span>${formatDate(info.lastSession)}</span></div>`;
-        if(info.sessionCount > 1) rows += `<div class="service-row"><span>Total sessions</span><span>${info.sessionCount}</span></div>`;
+        if(info.sessionCount > 0) rows += `<div class="service-row"><span>Total sessions</span><span>${info.sessionCount}</span></div>`;
         if(info.allSessions && info.allSessions.length > 0) {
           const toggleId = `sess_${idx}_${svc.key}`;
           rows += `<div class="service-row session-toggle-row" id="${toggleId}_row" onclick="toggleSessions('${toggleId}')"><span><i class="ti ti-calendar-event" aria-hidden="true" style="margin-right:4px"></i>All session dates</span><span><i class="ti ti-chevron-down chev" aria-hidden="true"></i></span></div>
@@ -714,10 +708,10 @@ function doSearch() {
           if (wd !== null) rows += `<div class="service-row"><span>Days since last session</span><span>${wd} working days</span></div>`;
         }
         if(info.discharged) rows += `<div class="service-row"><span>Discharge date</span><span class="discharge-highlight">${formatDate(info.discharged)}</span></div>`;
-        if(info.dischargeReason) rows += `<div class="service-row"><span>Discharge reason</span><span>${info.dischargeReason}</span></div>`;
-        if(info.priority) rows += `<div class="service-row"><span>Priority</span><span>${info.priority}</span></div>`;
-        if(info.cause) rows += `<div class="service-row"><span>Condition/cause</span><span>${info.cause}</span></div>`;
-        if(info.caseType) rows += `<div class="service-row"><span>Case type</span><span>${info.caseType}</span></div>`;
+        if(info.dischargeReason) rows += `<div class="service-row"><span>Discharge reason</span><span>${escapeText(info.dischargeReason)}</span></div>`;
+        if(info.priority) rows += `<div class="service-row"><span>Priority</span><span>${escapeText(info.priority)}</span></div>`;
+        if(info.cause) rows += `<div class="service-row"><span>Condition/cause</span><span>${escapeText(info.cause)}</span></div>`;
+        if(info.caseType) rows += `<div class="service-row"><span>Case type</span><span>${escapeText(info.caseType)}</span></div>`;
 
         servicesHtml += `<div class="service-card${info.discharged ? ' discharged' : ''}" style="border-left-color:${svc.color}"><div class="service-name"><span class="service-dot ${dotClass}"></span>${svc.label}</div>${rows}</div>`;
       });
@@ -744,20 +738,20 @@ function doSearch() {
 
     html += `<div class="bnf-card ${caseClose ? 'case-closed' : 'case-open'}" id="ecard_${idx}" style="${isDup && idx>0?'display:none':''}">
       <div class="bnf-header">
-        <div class="bnf-avatar" style="background:${avatarBg}">${initials}</div>
+        <div class="bnf-avatar" style="background:${avatarBg}">${escapeText(initials)}</div>
         <div style="flex:1">
-          <div class="bnf-name">${name} ${caseStatusHtml}</div>
-          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, `Local block: ${block}`].filter(Boolean).join(' · ')}</div>
+          <div class="bnf-name">${escapeText(name)} ${caseStatusHtml}</div>
+          <div class="bnf-meta">${[age?age+' years':'', sex, pwdText, camp, `Local block: ${block}`].filter(Boolean).map(escapeText).join(' · ')}</div>
         </div>
       </div>
       <div class="bnf-ids">
         <div class="id-badge"><strong>Identified by</strong>${escapeText(v(row,'CollectName') || 'Not recorded')}</div>
         <div class="id-badge"><strong>Identification date</strong>${v(row,'CollectData') ? formatDate(v(row,'CollectData')) : 'Not recorded'}</div>
-        <div class="id-badge"><strong>Barcode / BNF ID</strong>${bnfID}</div>
-        <div class="id-badge"><strong>Unique ID</strong>${txtUID}</div>
-        <div class="id-badge"><strong>Progress ID</strong>${progressID}</div>
-        ${cardNumber ? `<div class="id-badge"><strong>Card No</strong>${cardNumber}</div>` : ''}
-        ${isDuplicate ? `<div class="id-badge" style="color:var(--text-warning, #B45309)"><i class="ti ti-copy" aria-hidden="true"></i> Duplicate flagged${dupBarcodes ? ` — barcode: ${dupBarcodes}` : ''}</div>` : ''}
+        <div class="id-badge"><strong>Barcode / BNF ID</strong>${escapeText(bnfID)}</div>
+        <div class="id-badge"><strong>Unique ID</strong>${escapeText(txtUID)}</div>
+        <div class="id-badge"><strong>Progress ID</strong>${escapeText(progressID)}</div>
+        ${cardNumber ? `<div class="id-badge"><strong>Card No</strong>${escapeText(cardNumber)}</div>` : ''}
+        ${isDuplicate ? `<div class="id-badge" style="color:var(--text-warning, #B45309)"><i class="ti ti-copy" aria-hidden="true"></i> Duplicate flagged${dupBarcodes ? ` — barcode: ${escapeText(dupBarcodes)}` : ''}</div>` : ''}
       </div>
       ${kpiHtml}
       ${overviewHtml}
